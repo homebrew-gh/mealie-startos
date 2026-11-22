@@ -34,6 +34,10 @@ To update, sideload the newer release over the installed one. Your data stays. S
 
 Requires StartOS 0.4. Mealie's first start takes a minute or two while it sets up its database.
 
+## Companion Android app
+
+[YesChef](https://github.com/homebrew-gh/yeschef) is a native, offline-first Android app for Mealie (phone and tablet) by the same author: shopping lists sorted by aisle, cook mode with timers, and a cookbook view. It works with any Mealie server and is a good fit for this package over the StartOS WireGuard VPN. Its cookbook chapters and filters use the same category and tag scheme that the AI connector applies (see below).
+
 ## Image and container runtime
 
 | Property      | Value                                                                                   |

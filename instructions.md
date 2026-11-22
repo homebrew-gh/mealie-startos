@@ -45,6 +45,8 @@ Every request from a provider goes to the model you set on it. Anthropic's endpo
 
 Any address StartOS lists for the interface works, including your box's LAN address when you are connected over the StartOS WireGuard VPN. HTTPS addresses use your server's own certificate authority, so a device or program that talks to Mealie over HTTPS must trust your **Root CA**: download it from StartOS and install it on the device, as described in the StartOS guide to trusting your Root CA (on Android it goes in **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**). Plain-HTTP LAN addresses don't need it, but send your token unencrypted.
 
+For an Android phone or tablet, [YesChef](https://github.com/homebrew-gh/yeschef) is a companion app for Mealie with offline shopping lists sorted by aisle, cook mode with timers, and a cookbook view. Set it up with the address and token from the steps above.
+
 ## AI connector (Claude and other cloud assistants)
 
 The package includes an optional MCP server that lets AI assistants search and read your recipes, add new ones, and manage meal plans and shopping lists. It has its own **AI Connector (MCP)** interface, so you can put just the connector on the internet and keep Mealie itself private on your LAN and VPN.
