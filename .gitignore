@@ -1,0 +1,16 @@
+*.s9pk
+startos/*.js
+node_modules/
+.DS_Store
+.vscode/
+docker-images
+javascript
+ncc-cache
+tasks/
+bun.lock
+# Downloaded service logs kept for local debugging — never committed
+*-logs.html
+*-logs.txt
+*.log
+# written by testing/injector.py enable
+/startos/actions/other/injectTestFaults.ts
