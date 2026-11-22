@@ -1,10 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '3.31.0:6',
+  version: '3.31.0:7',
   releaseNotes: {
     en_US:
-      'AI connector: assistants are told to keep mains and sides as separate recipes and plan them in the same meal slot, so the YesChef app can cook a whole meal on one timeline. update_recipe can now set prep, cook and total times, and a new delete_recipe tool lets assistants remove old combined recipes after splitting them.',
+      'AI connector fixes: prep, cook and total times given to create_recipe are now saved, and a zero time (PT0M, for example a no-cook sauce) is stored as "0 minutes" instead of being dropped.',
   },
   migrations: {
     up: async ({ effects }) => {},
