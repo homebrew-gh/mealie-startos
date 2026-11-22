@@ -12,6 +12,18 @@
 
 [Mealie](https://github.com/mealie-recipes/mealie) is a self-hosted recipe manager, meal planner and shopping list with a REST API. This repository packages the stock upstream image for [StartOS](https://github.com/Start9Labs/start-os) 0.4. It does not fork or patch Mealie.
 
+## Installing
+
+This is a community package. It is not in the Start9 marketplace and is not made or endorsed by Start9 or by the Mealie project.
+
+1. Download the `.s9pk` for your server from the [latest release](https://github.com/homebrew-gh/mealie-startos/releases/latest): `mealie_x86_64.s9pk` for most PCs and mini PCs, `mealie_aarch64.s9pk` for ARM boards such as a Raspberry Pi. Check its SHA-256 against the one in the release notes if you like.
+2. In StartOS, go to **System → Sideload** and upload it.
+3. Start Mealie and follow its **Instructions** tab, which is the same as [`instructions.md`](instructions.md): first login, AI provider setup, and the optional AI connector for Claude and other assistants.
+
+To update, sideload the newer release over the installed one. Your data stays. StartOS doesn't check this repository for updates, so watch its releases on GitHub.
+
+Requires StartOS 0.4. Mealie's first start takes a minute or two while it sets up its database.
+
 ## Image and container runtime
 
 | Property      | Value                                                                                   |
@@ -23,10 +35,11 @@
 
 ## Volumes
 
-| Volume    | Mount point   | Contents                                                                                                         |
-| --------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `main`    | `/app/data`   | SQLite `mealie.db`, recipe images, user files, Mealie's own backup zips, generated `.secret` / `.session_secret` |
-| `startos` | (not mounted) | `store.json`: primary URL, time zone, sign-up toggle                                                             |
+| Volume    | Mount point              | Contents                                                                                                               |
+| --------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `main`    | `/app/data`              | SQLite `mealie.db`, recipe images, user files, Mealie's own backup zips, generated `.secret` / `.session_secret`       |
+| `startos` | (not mounted)            | `store.json`: primary URL, time zone, sign-up toggle, AI connector settings (enabled, Mealie API token, password, URL) |
+| `mcp`     | `/data` (connector only) | `oauth-state.json`: the connector's registered OAuth clients and hashed tokens                                         |
 
 The `main` volume is mounted at its root, not a subpath, so the entrypoint's `chown` works inside the subcontainer.
 
@@ -46,7 +59,7 @@ AI providers (OpenAI-compatible key, base URL, model) are **not** package config
 
 ## Network interfaces
 
-One interface, `webui` on host `main`, type `ui`, port 9000. It serves the web app at `/`, the API at `/api` and OpenAPI docs at `/docs`. StartOS publishes it on LAN (including the WireGuard VPN), and on Tor or a domain if the user adds them. API clients over HTTPS must trust the StartOS Root CA.
+`webui` on host `main`, type `ui`, port 9000, serves the web app at `/`, the API at `/api` and OpenAPI docs at `/docs`. StartOS publishes it on LAN (including the WireGuard VPN), and on Tor or a domain if the user adds them. API clients over HTTPS must trust the StartOS Root CA. The AI connector has its own interface, described below.
 
 ## AI connector (MCP)
 
@@ -62,11 +75,13 @@ Optional second daemon, started only when **Configure AI Connector** has it enab
 
 ## Actions
 
-| Action                        | Purpose                                             |
-| ----------------------------- | --------------------------------------------------- |
-| Set Primary URL               | `BASE_URL` for generated links; sets Open UI target |
-| Set Time Zone                 | `TZ`                                                |
-| Enable / Disable Open Sign-up | `ALLOW_SIGNUP`                                      |
+| Action                        | Purpose                                                |
+| ----------------------------- | ------------------------------------------------------ |
+| Set Primary URL               | `BASE_URL` for generated links; sets Open UI target    |
+| Set Time Zone                 | `TZ`                                                   |
+| Enable / Disable Open Sign-up | `ALLOW_SIGNUP`                                         |
+| Configure AI Connector        | Connector on/off, Mealie API token, connector password |
+| Set AI Connector URL          | Public HTTPS URL of the connector (`PUBLIC_URL`)       |
 
 ## Health checks
 
@@ -92,3 +107,23 @@ make x86        # one architecture
 ```
 
 Requires `start-cli`, Docker with buildx, and Node 22. Sideload the resulting `.s9pk` from StartOS (System → Sideload).
+
+CI: `.github/workflows/build.yml` builds both architectures on every pull request and on a manual run, and keeps the files as workflow artifacts for 14 days.
+
+## Releasing
+
+`.github/workflows/release.yml` runs when a tag starting with `v` is pushed. It checks that the tag matches the version in `startos/versions/current.ts` (`3.31.0:2` must be tagged `v3.31.0_2`), builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
+
+One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). Either `start-cli init-key` (writes `~/.startos/developer.key.pem`) or `openssl genpkey -algorithm ed25519 -out dev-key.pem` makes one. Paste the whole PEM file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key.
+
+To release: bump the version as in `UPDATING.md`, merge, then tag `main` and push the tag:
+
+```
+git checkout main && git pull
+git tag v3.31.0_2
+git push origin v3.31.0_2
+```
+
+## License
+
+The packaging code in this repository is AGPL-3.0, the same license as Mealie. Mealie itself is © the Mealie contributors and is pulled unmodified from `ghcr.io/mealie-recipes/mealie`. See the [Mealie repository](https://github.com/mealie-recipes/mealie) for its license and authors.

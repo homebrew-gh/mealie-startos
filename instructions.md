@@ -23,9 +23,20 @@ Mealie works at every address you expose it at: your `.local` address, a LAN IP,
 
 ## AI features
 
-Mealie can parse ingredients, rescue imports from sites its scraper can't read, and build recipes from pasted text, photos or video, using any OpenAI-compatible provider (OpenAI, OpenRouter, a local Ollama, and so on).
+Mealie can parse ingredients, rescue imports from sites its scraper can't read, and build recipes from pasted text, photos or video, using any OpenAI-compatible provider.
 
-Current Mealie versions set this up inside Mealie, not with the old `OPENAI_*` environment variables: as an admin or group manager, open **Group Settings → AI** and add a provider with its API key, base URL and model. The key is stored in Mealie's database, so it is included in StartOS backups.
+Current Mealie versions set this up inside Mealie, not with the old `OPENAI_*` environment variables: as an admin or group manager, open **Group Settings → AI** and add a provider with its API key, base URL and model. Make it the default provider (and the image provider if you want photo imports). The key is stored in Mealie's database, so it is included in StartOS backups.
+
+Some providers that work:
+
+| Provider           | Base URL                            | Model                    |
+| ------------------ | ----------------------------------- | ------------------------ |
+| OpenAI             | `https://api.openai.com/v1/`        | any chat model it offers |
+| Claude (Anthropic) | `https://api.anthropic.com/v1/`     | `claude-sonnet-5-5`      |
+| OpenRouter         | `https://openrouter.ai/api/v1/`     | any model it lists       |
+| Ollama on your LAN | `http://<ollama address>:11434/v1/` | a model you pulled       |
+
+Every request from a provider goes to the model you set on it. Anthropic's endpoint is its OpenAI-compatible layer and uses Claude Console API credits, not a Claude.ai subscription. It has no speech-to-text, so importing from video needs a separate audio provider, such as OpenAI.
 
 ## Using the API from other apps and agents
 
@@ -36,17 +47,48 @@ Any address StartOS lists for the interface works, including your box's LAN addr
 
 ## AI connector (Claude and other cloud assistants)
 
-The package includes an optional MCP server that lets AI assistants search and read your recipes, add new ones, and manage meal plans and shopping lists. It has its own **AI Connector (MCP)** interface, so you can put just the connector on the internet and keep Mealie private.
+The package includes an optional MCP server that lets AI assistants search and read your recipes, add new ones, and manage meal plans and shopping lists. It has its own **AI Connector (MCP)** interface, so you can put just the connector on the internet and keep Mealie itself private on your LAN and VPN.
 
-1. In Mealie, create an API token (profile → **API Tokens**). The connector acts as that user.
-2. Give the **AI Connector (MCP)** interface a public domain: on its interface page, in your StartTunnel gateway's address table, choose **Add Domain → Public Domain**, enter a domain such as `mealie-mcp.example.com`, and pick **Let's Encrypt** so cloud services trust the certificate. Point the domain's DNS at your StartTunnel server's public IP. See the StartOS guide to [clearnet access](https://docs.start9.com/start-os/0.4.0.x/user-manual/public-access/clearnet.html).
-3. Run **Set AI Connector URL** and choose that domain.
-4. Run **Configure AI Connector**: turn it on, paste the Mealie API token, and set (or generate) a connector password. Save the password somewhere safe.
-5. In Claude on the web, go to **Settings → Connectors → Add custom connector** and enter `https://<your domain>/mcp`. Claude opens an approval page on your box: enter the connector password and click **Allow access**. The connector then also works in the Claude mobile apps.
+Cloud assistants such as Claude call the connector from their own servers, not from your phone, so the connector needs a public address with a certificate they trust. On StartOS that means a public domain through a gateway such as StartTunnel, with a Let's Encrypt certificate. A `.local` address, a Tor address or your box's own Root CA certificate won't work for them.
 
-When an assistant creates or imports a recipe through the connector, the connector runs Mealie's ingredient parser on it (using your AI provider if one is set up) so each ingredient is linked to a food. Assistants can also set a food's store section, such as Produce or Dairy, so shopping lists come out sorted by aisle. Sorting works best if Mealie has a starter set of foods and store sections, which Mealie can seed for you from its data management settings.
+### What you need
 
-Only someone who knows the connector password can connect an assistant. Five wrong passwords lock the approval page for 15 minutes. To cut off every connected assistant, change the connector password and also revoke the Mealie API token if you think it leaked.
+- A domain name you control, for example `example.com`. You'll use a subdomain of it, such as `mealie-mcp.example.com`.
+- A StartTunnel server (or another public gateway) connected to your box. See the StartOS guide to [clearnet access](https://docs.start9.com/start-os/0.4.0.x/user-manual/public-access/clearnet.html).
+
+### Setting it up
+
+1. **Mealie API token.** In Mealie, open your profile, go to **API Tokens**, and create a token, for example "AI connector". Copy it. The connector acts as that Mealie user.
+2. **DNS record.** Where your domain's DNS is hosted, add an **A** record for the subdomain (for example `mealie-mcp`) pointing to your StartTunnel server's public IPv4 address. If your DNS is on Cloudflare, set it to **DNS only**, not proxied.
+3. **Public domain.** In StartOS, open Mealie's **AI Connector (MCP)** interface. In your StartTunnel gateway's row, choose **Add Domain → Public Domain**, enter `mealie-mcp.example.com`, and pick **Let's Encrypt**. StartOS checks the DNS record and the port forward and tells you what to fix if either fails. Leave Mealie's own **Web UI and API** interface private.
+4. **Set AI Connector URL.** Run this action and choose the domain.
+5. **Configure AI Connector.** Run this action: turn it on, paste the Mealie API token, and set or generate a connector password. Save the password somewhere safe. The **AI Connector** health check turns green when it is running.
+6. **Check it from outside.** Open `https://mealie-mcp.example.com/healthz` on your phone with Wi-Fi and VPN off. It should show `{"ok":true}`.
+7. **Connect an assistant.** The connector address is `https://mealie-mcp.example.com/mcp`.
+   - **Claude:** on the web, go to **Settings → Connectors → Add custom connector** and enter the address. Claude opens an approval page on your box: enter the connector password and click **Allow access**. The connector then also works in the Claude mobile and desktop apps.
+   - **Other assistants:** any assistant or MCP client that can add a remote MCP server over HTTP with OAuth sign-in works the same way: give it the address, and approve it with the connector password.
+
+### Ingredients and store sections
+
+When an assistant creates or imports a recipe through the connector, the connector runs Mealie's ingredient parser on it, using your AI provider if one is set up and Mealie's built-in parser otherwise, so each ingredient is linked to a food. Assistants can also set a food's store section, such as Produce or Dairy, so shopping lists come out sorted by aisle.
+
+This works best if Mealie has a starter set of foods, units and store sections (Mealie calls them labels). In Mealie's **Data Management** pages for foods, units and labels, use **Seed** to load Mealie's defaults.
+
+### Security
+
+Only someone who knows the connector password can connect an assistant. Five wrong passwords lock the approval page for 15 minutes. A connected assistant can do anything the connector's tools allow, as the Mealie user whose token you gave it, but it can't reach Mealie's admin pages or anything else on your box.
+
+To cut off every connected assistant, change the connector password in **Configure AI Connector**. If you think the Mealie API token leaked, delete it in Mealie and enter a new one.
+
+### Troubleshooting
+
+- **No AI Connector health check, or the connector isn't running:** it only starts when it is turned on, has both a token and a password, and **Set AI Connector URL** points at a public HTTPS domain. Run both actions again.
+- **The domain won't verify in StartOS:** check that the A record points at the StartTunnel server's public IP (`nslookup mealie-mcp.example.com`) and isn't proxied. DNS changes can take a few minutes.
+- **The assistant can't connect, or step 6 fails:** the domain must use **Let's Encrypt**, not your box's own certificate, and must be on the **AI Connector (MCP)** interface, not Mealie's.
+- **"Too many attempts" on the approval page:** wait 15 minutes, then try again with the right password.
+- **Tools fail with HTTP 401:** the Mealie API token was deleted or is wrong. Create a new one and enter it in **Configure AI Connector**.
+- **You changed the connector's domain:** remove the connector from your assistant and add it again with the new address.
+- **The assistant doesn't see new tools after an update:** disconnect and reconnect the connector in the assistant, or start a new chat.
 
 ## Actions
 
