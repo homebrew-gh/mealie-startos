@@ -1,5 +1,7 @@
 # Updating the upstream version
 
+New minor and patch releases are picked up and released automatically by `.github/workflows/auto-update.yml` (see "Automatic updates" in `README.md`). Do it by hand for a major version, or when the automatic update opened an issue.
+
 Mealie runs the official `ghcr.io/mealie-recipes/mealie` image, pinned by tag in `startos/manifest/index.ts`. Image tags match GitHub release tags, including the leading `v`.
 
 ## Find the new version
@@ -9,6 +11,8 @@ gh release view -R mealie-recipes/mealie --json tagName -q .tagName
 ```
 
 ## Apply the bump
+
+`node .github/scripts/bump-mealie.mjs vX.Y.Z` does both steps below.
 
 1. Set `images.mealie.source.dockerTag` in `startos/manifest/index.ts` to the new tag.
 2. In `startos/versions/`, move `current.ts` into a file named for the old version, add it to `other` in `versions/index.ts`, and write a new `current.ts` with version `<new>:0` and release notes.

@@ -124,6 +124,18 @@ git tag v3.31.0_2
 git push origin v3.31.0_2
 ```
 
+### Automatic updates
+
+`.github/workflows/auto-update.yml` runs daily (and on demand from the Actions tab). When `mealie-recipes/mealie` has a newer `vX.Y.Z` release than the image pinned in the manifest, it:
+
+1. bumps the package on a branch `auto-update/mealie-vX.Y.Z` with `.github/scripts/bump-mealie.mjs` (the steps in `UPDATING.md`; new version `X.Y.Z:0`) and type-checks it,
+2. tags that commit `vX.Y.Z_0` and runs Start9's release workflow on it,
+3. only if the release succeeds, fast-forwards `main` to the released commit and deletes the branch.
+
+It never releases a new **major** version on its own: it opens an issue instead, and a manual run with **Also release a new major version of Mealie** ticked releases it. If the build or release fails, it deletes the tag, leaves `main` unchanged and opens an issue; that version is skipped until the issue is closed. Pre-releases are ignored.
+
+The automated path only checks that the package builds. It does not run Mealie, so the `UPDATING.md` checks of upstream behaviour are not automated.
+
 ## License
 
 The packaging code in this repository is AGPL-3.0, the same license as Mealie. Mealie itself is © the Mealie contributors and is pulled unmodified from `ghcr.io/mealie-recipes/mealie`. See the [Mealie repository](https://github.com/mealie-recipes/mealie) for its license and authors.
