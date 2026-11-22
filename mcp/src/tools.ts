@@ -813,6 +813,101 @@ export function registerTools(server: McpServer) {
   )
 
   server.registerTool(
+    'add_meal_plan_to_shopping_list',
+    {
+      title: 'Add a meal plan to shopping list',
+      description:
+        'Add the ingredients of every recipe planned between two dates (inclusive) to a shopping list, in one call. Mealie merges duplicates. Free-text meal plan entries without a recipe are skipped and listed. To rebuild a list for the week, run clear_shopping_list first.',
+      inputSchema: {
+        listId: z.string(),
+        startDate: date,
+        endDate: date,
+      },
+    },
+    async ({ listId, startDate, endDate }) => {
+      const plan = await mealie('GET', '/households/mealplans', {
+        query: {
+          start_date: startDate,
+          end_date: endDate,
+          perPage: -1,
+          orderBy: 'date',
+          orderDirection: 'asc',
+        },
+      })
+      const entries = plan.items ?? []
+      const withRecipe = entries.filter((e: any) => e.recipe?.id || e.recipeId)
+      const skipped = entries
+        .filter((e: any) => !(e.recipe?.id || e.recipeId))
+        .map(
+          (e: any) =>
+            `${e.date} ${e.entryType}: ${e.title || e.text || '(no title)'}`,
+        )
+      if (!withRecipe.length) {
+        return json({
+          addedRecipes: [],
+          skipped,
+          note: 'No planned recipes in that range.',
+        })
+      }
+      const l = await mealie(
+        'POST',
+        `/households/shopping/lists/${encodeURIComponent(listId)}/recipe`,
+        {
+          body: withRecipe.map((e: any) => ({
+            recipeId: e.recipe?.id ?? e.recipeId,
+            recipeIncrementQuantity: 1,
+          })),
+        },
+      )
+      return json({
+        list: { id: l.id, name: l.name },
+        addedRecipes: withRecipe.map(
+          (e: any) =>
+            `${e.date} ${e.entryType}: ${e.recipe?.name ?? e.recipeId}`,
+        ),
+        skipped,
+        items: (l.listItems ?? [])
+          .filter((i: any) => !i.checked)
+          .map(itemSummary),
+      })
+    },
+  )
+
+  server.registerTool(
+    'clear_shopping_list',
+    {
+      title: 'Clear shopping list',
+      description:
+        'Remove items from one shopping list in a single call: every item, or only the checked-off ones. The list itself and other lists are untouched.',
+      inputSchema: {
+        listId: z.string(),
+        onlyChecked: z
+          .boolean()
+          .optional()
+          .describe(
+            'Only remove checked-off items (default false: remove everything)',
+          ),
+      },
+      annotations: { destructiveHint: true },
+    },
+    async ({ listId, onlyChecked }) => {
+      const l = await mealie(
+        'GET',
+        `/households/shopping/lists/${encodeURIComponent(listId)}`,
+      )
+      const ids = (l.listItems ?? [])
+        .filter((i: any) => !onlyChecked || i.checked)
+        .map((i: any) => i.id)
+      for (let k = 0; k < ids.length; k += 50) {
+        await mealie('DELETE', '/households/shopping/items', {
+          query: { ids: ids.slice(k, k + 50) },
+        })
+      }
+      return json({ list: { id: l.id, name: l.name }, removed: ids.length })
+    },
+  )
+
+  server.registerTool(
     'set_shopping_item_checked',
     {
       title: 'Check off shopping item',
