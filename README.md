@@ -114,7 +114,7 @@ CI: `.github/workflows/build.yml` builds both architectures on every pull reques
 
 `.github/workflows/release.yml` runs when a tag starting with `v` is pushed. It checks that the tag matches the version in `startos/versions/current.ts` (`3.31.0:2` must be tagged `v3.31.0_2`), builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
 
-One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). Either `start-cli init-key` (writes `~/.startos/id.key.pem`) or `openssl genpkey -algorithm ed25519 -out dev-key.pem` makes one. Paste the whole PEM file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key.
+One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). Either `start-cli init-key` (writes `~/.startos/developer.key.pem`) or `openssl genpkey -algorithm ed25519 -out dev-key.pem` makes one. Paste the whole PEM file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key.
 
 To release: bump the version as in `UPDATING.md`, merge, then tag `main` and push the tag:
 
