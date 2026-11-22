@@ -18,6 +18,16 @@ This is a community package. It is not in the Start9 marketplace and is not made
 
 1. Download the `.s9pk` for your server from the [latest release](https://github.com/homebrew-gh/mealie-startos/releases/latest): `mealie_x86_64.s9pk` for most PCs and mini PCs, `mealie_aarch64.s9pk` for ARM boards such as a Raspberry Pi. Check its SHA-256 against the one in the release notes if you like.
 2. In StartOS, go to **System → Sideload** and upload it.
+   - StartOS warns that the package is signed by a key it doesn't trust yet, because it only trusts Start9's keys out of the box. Releases are signed with this key, also in [`signing-key.pub.pem`](signing-key.pub.pem):
+
+     ```
+     -----BEGIN PUBLIC KEY-----
+     MCowBQYDK2VwAyEAfk8NtBnWK/oUz24B1d4EkepQmcD/JXOEbp08T+N3nf0=
+     -----END PUBLIC KEY-----
+     ```
+
+     Its SHA-256 fingerprint (of the DER public key) is `61e79d25440a813056a0873c10205712f62313c6f2c4d9d90af4797f6a9c0d03`. Under **Signed by**, open the key, check that it matches, give it a label and trust it for **packages** (not for StartOS updates). Later releases then install without the warning. You can also add it under **System → Trusted Keys → Add key**.
+
 3. Start Mealie and follow its **Instructions** tab, which is the same as [`instructions.md`](instructions.md): first login, AI provider setup, and the optional AI connector for Claude and other assistants.
 
 To update, sideload the newer release over the installed one. Your data stays. StartOS doesn't check this repository for updates, so watch its releases on GitHub.
@@ -115,7 +125,7 @@ CI: `.github/workflows/build.yml` builds both architectures on every pull reques
 
 `.github/workflows/release.yml` runs when a tag starting with `v` is pushed. It checks that the tag matches the version in `startos/versions/current.ts` (`3.31.0:2` must be tagged `v3.31.0_2`), builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
 
-One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). Either `start-cli init-key` (writes `~/.startos/developer.key.pem`) or `openssl genpkey -algorithm ed25519 -out dev-key.pem` makes one. Paste the whole PEM file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key.
+One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). `start-cli init-key` makes one at `~/.startos/developer.key.pem`. Paste the whole file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key, because users trust it by its public key (`start-cli pubkey` prints it; it is published in `signing-key.pub.pem` and under Installing). If the key ever changes, update both.
 
 To release: bump the version as in `UPDATING.md`, merge, then tag `main` and push the tag:
 
