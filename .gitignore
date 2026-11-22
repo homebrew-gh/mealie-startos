@@ -14,3 +14,4 @@ bun.lock
 *.log
 # written by testing/injector.py enable
 /startos/actions/other/injectTestFaults.ts
+mcp/dist/

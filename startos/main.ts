@@ -1,8 +1,9 @@
 import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
+import { mcpUrl } from './mcpUrl'
 import { primaryUrl } from './primaryUrl'
 import { sdk } from './sdk'
-import { dataMount, defaultTimezone, uiPort } from './utils'
+import { dataMount, defaultTimezone, mcpMount, mcpPort, uiPort } from './utils'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info(i18n('Starting Mealie!'))
@@ -23,7 +24,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // warns on the admin page; only override it with a real address.
   if (baseUrl) env.BASE_URL = baseUrl
 
-  return sdk.Daemons.of(effects).addDaemon('mealie', {
+  const daemons = sdk.Daemons.of(effects).addDaemon('mealie', {
     subcontainer: sdk.SubContainer.of(
       effects,
       { imageId: 'mealie' },
@@ -52,4 +53,64 @@ export const main = sdk.setupMain(async ({ effects }) => {
     },
     requires: [],
   })
+
+  // ---------------- AI connector ----------------
+  const mcp = store?.mcp
+  const connectorUrl = await mcpUrl.bestUsable(effects).const()
+  if (!mcp?.enabled) return daemons
+  if (
+    !mcp.mealieToken ||
+    !mcp.password ||
+    !connectorUrl?.startsWith('https://')
+  ) {
+    console.warn(
+      'AI connector is enabled but not started: it needs a Mealie API token, a connector password and a public HTTPS connector URL.',
+    )
+    return daemons
+  }
+
+  const mcpSub = sdk.SubContainer.of(
+    effects,
+    { imageId: 'mcp' },
+    mcpMount,
+    'mcp-sub',
+  )
+
+  return daemons
+    .addOneshot('mcp-chown', {
+      subcontainer: mcpSub,
+      exec: { command: ['chown', '-R', 'node:node', '/data'], user: 'root' },
+      requires: [],
+    })
+    .addDaemon('mcp', {
+      subcontainer: mcpSub,
+      exec: {
+        command: ['node', 'dist/index.js'],
+        cwd: '/app',
+        user: 'node',
+        env: {
+          PORT: String(mcpPort),
+          PUBLIC_URL: connectorUrl,
+          MEALIE_URL: `http://127.0.0.1:${uiPort}`,
+          MEALIE_API_TOKEN: mcp.mealieToken,
+          CONNECTOR_PASSWORD: mcp.password,
+          STATE_FILE: '/data/oauth-state.json',
+        },
+      },
+      ready: {
+        display: i18n('AI Connector'),
+        fn: () =>
+          sdk.healthCheck.checkWebUrl(
+            effects,
+            `http://127.0.0.1:${mcpPort}/healthz`,
+            {
+              timeout: 5_000,
+              successMessage: i18n('The AI connector is ready'),
+              errorMessage: i18n('The AI connector is not ready'),
+            },
+          ),
+        gracePeriod: 30_000,
+      },
+      requires: ['mcp-chown', 'mealie'],
+    })
 })

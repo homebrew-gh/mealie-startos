@@ -21,3 +21,9 @@ gh release view -R mealie-recipes/mealie --json tagName -q .tagName
 - None of `DB_ENGINE`, `API_PORT`, `BASE_URL`, `TZ`, `ALLOW_SIGNUP` were renamed in `mealie/core/settings/settings.py`.
 - The data directory is still `/app/data`.
 - Read the release notes for the whole range for breaking changes and migrations.
+
+## AI connector (`mcp/`)
+
+The connector calls these Mealie endpoints; check none changed shape in the release range: `GET /api/recipes`, `GET/PATCH /api/recipes/{slug}`, `POST /api/recipes/create/url`, `POST /api/recipes/create/html-or-json`, `GET/POST/DELETE /api/households/mealplans`, `GET/POST /api/households/shopping/lists`, `GET /api/households/shopping/lists/{id}`, `POST /api/households/shopping/lists/{id}/recipe`, `POST /api/households/shopping/items/create-bulk`, `GET/PUT/DELETE /api/households/shopping/items/{id}`.
+
+Bump `@modelcontextprotocol/sdk` in `mcp/package.json` with `npm install` there, then `npx tsc` in `mcp/`.

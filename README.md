@@ -48,6 +48,17 @@ AI providers (OpenAI-compatible key, base URL, model) are **not** package config
 
 One interface, `webui` on host `main`, type `ui`, port 9000. It serves the web app at `/`, the API at `/api` and OpenAPI docs at `/docs`. StartOS publishes it on LAN (including the WireGuard VPN), and on Tor or a domain if the user adds them. API clients over HTTPS must trust the StartOS Root CA.
 
+## AI connector (MCP)
+
+Optional second daemon, started only when **Configure AI Connector** has it enabled with a Mealie API token and password **and** a public HTTPS URL is set (**Set AI Connector URL**, limited to public domains with TLS on the `mcp` interface). Source in `mcp/`.
+
+- Interface `mcp` on host `mcp` (type `api`, port 8000, path `/mcp`), separate from Mealie's host so it can be public alone.
+- Streamable HTTP, stateless, at `POST /mcp`.
+- Its own OAuth 2.1 authorization server (via the SDK's `mcpAuthRouter`): RFC 8414 + RFC 9728 metadata, Dynamic Client Registration, PKCE S256, rotating refresh tokens (90 days), 1-hour access tokens bound to the `/mcp` resource. Approval is a password page; 5 failures in 15 minutes locks it. Built for claude.ai custom connectors, which need DCR (or CIMD) and call from Anthropic's cloud.
+- Calls Mealie at `http://127.0.0.1:9000/api` with the configured API token.
+- Tools: `search_recipes`, `get_recipe`, `import_recipe_from_url`, `create_recipe`, `update_recipe`, `list_meal_plan`, `add_meal_plan_entry`, `remove_meal_plan_entry`, `list_shopping_lists`, `get_shopping_list`, `create_shopping_list`, `add_shopping_list_items`, `add_recipe_to_shopping_list`, `set_shopping_item_checked`, `remove_shopping_item`.
+- Health check: `GET /healthz`.
+
 ## Actions
 
 | Action                        | Purpose                                             |
@@ -61,10 +72,11 @@ One interface, `webui` on host `main`, type `ui`, port 9000. It serves the web a
 | Check         | Method                                                                                                                         |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Web Interface | HTTP GET `http://127.0.0.1:9000/api/app/about` (same as upstream `HEALTHCHECK`), 120 s grace period for first-start migrations |
+| AI Connector  | HTTP GET `http://127.0.0.1:8000/healthz` (only when the connector runs)                                                        |
 
 ## Backups
 
-`main` and `startos` volumes, excluding `.temp` and SQLite `-shm` files.
+`main`, `startos` and `mcp` volumes, excluding `.temp` and SQLite `-shm` files.
 
 ## First run
 
