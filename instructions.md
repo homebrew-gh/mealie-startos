@@ -80,6 +80,10 @@ This works best if Mealie has a starter set of foods, units and store sections (
 
 Assistants can file recipes into categories and tags and record when you cooked something. By default they use one category per recipe as its cookbook chapter (Mains, Sides, Soups & Salads, Breakfast, Desserts, Baking, Starters & Snacks, Drinks, Sauces & Basics), and tags for the main protein (Chicken, Beef, Pork, Lamb, Seafood, Vegetarian, Vegan) and cooking style (Quick, Slow cooker, Grill, One pot, Make ahead). Missing categories and tags are created. You can ask for something like "sort all my recipes into chapters and tag them by protein" or "I made the chili last night".
 
+### Mains and sides
+
+Assistants are asked to save a main and each side as separate recipes, and to plan them on the same day under the same meal (for example both under dinner), so the YesChef app can cook the whole meal on one timeline. They also set each recipe's prep and cook times, which that timeline is built from. If older recipes have a side merged into the main, you can ask an assistant to split them: it creates the side as its own recipe, trims the main, updates the meal plan and deletes any leftover combined recipe.
+
 ### A shopping list for your assistant
 
 An assistant can keep its own shopping list, for example "Weekly meals", without touching your other lists. It can empty that one list in a single step and refill it from every recipe on the meal plan for a date range.

@@ -54,6 +54,40 @@ async function parseAfterSave(slug: string, parse: boolean | undefined) {
   }
 }
 
+/**
+ * How YesChef cooks a whole meal: every recipe planned in the same slot (same
+ * date and meal) goes into one cook timeline, scheduled from each recipe's
+ * prep and cook times.
+ */
+const MEAL_GUIDANCE =
+  'Keep each dish its own recipe: save a main and its sides as separate recipes, never merged into one, and put sides in the Sides category. ' +
+  'To plan a meal, add the main and each side to the meal plan on the same date with the same entryType (for example all "dinner"); the YesChef app cooks everything in one slot as a single timeline. ' +
+  'Set prepTime and cookTime on every recipe, because the timeline is scheduled from them.'
+
+/** ISO 8601 duration ("PT1H30M") to Mealie's stored text ("1 hour 30 minutes"). */
+function isoToMealieTime(iso: string): string {
+  const m = iso
+    .trim()
+    .match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i)
+  if (!m || !m.slice(1).some(Boolean)) return iso.trim()
+  const parts: string[] = []
+  const add = (n: string | undefined, unit: string) => {
+    const v = Number(n ?? 0)
+    if (v) parts.push(`${v} ${unit}${v === 1 ? '' : 's'}`)
+  }
+  add(m[1], 'day')
+  add(m[2], 'hour')
+  add(m[3], 'minute')
+  add(m[4], 'second')
+  return parts.join(' ')
+}
+
+const durationArg = (what: string) =>
+  z
+    .string()
+    .optional()
+    .describe(`${what} as an ISO 8601 duration, e.g. PT15M or PT1H30M`)
+
 const categoriesArg = z
   .array(z.string())
   .optional()
@@ -119,7 +153,9 @@ const date = z
 
 const entryType = z
   .enum(['breakfast', 'lunch', 'dinner', 'side', 'snack', 'drink', 'dessert'])
-  .describe('Which meal of the day')
+  .describe(
+    'Which meal of the day. Plan a side under the same meal as its main (e.g. "dinner"), not as "side", so they cook together.',
+  )
 
 const names = (xs: any[] | undefined) =>
   (xs ?? []).map((x) => x?.name).filter(Boolean)
@@ -143,7 +179,7 @@ function recipeDetail(r: any) {
     servings: r.recipeServings || undefined,
     yield: r.recipeYield || undefined,
     prepTime: r.prepTime || undefined,
-    performTime: r.performTime || undefined,
+    cookTime: r.performTime || r.cookTime || undefined,
     ingredients: (r.recipeIngredient ?? []).map(
       (i: any) => i.display || i.originalText || i.note || '',
     ),
@@ -270,7 +306,9 @@ export function registerTools(server: McpServer) {
       title: 'Create recipe',
       description:
         'Save a new recipe you have written or transcribed. Mealie parses it like a schema.org Recipe. Returns the new slug. Give it a category and tags so it is filed in the cookbook. ' +
-        ORGANIZING_SCHEME,
+        ORGANIZING_SCHEME +
+        ' ' +
+        MEAL_GUIDANCE,
       inputSchema: {
         name: z.string(),
         description: z.string().optional(),
@@ -339,8 +377,10 @@ export function registerTools(server: McpServer) {
     {
       title: 'Update recipe',
       description:
-        "Change fields of an existing recipe. Only the fields you pass are changed. Ingredients, instructions, notes, categories and tags, if given, replace the existing lists, so to add a tag pass the recipe's current tags plus the new one. " +
-        ORGANIZING_SCHEME,
+        "Change fields of an existing recipe. Only the fields you pass are changed. Ingredients, instructions, notes, categories and tags, if given, replace the existing lists, so to add a tag pass the recipe's current tags plus the new one. To split a combined recipe into a main and a side, create the side with create_recipe, update this one to remove the side's ingredients and steps, and fix the meal plan. " +
+        ORGANIZING_SCHEME +
+        ' ' +
+        MEAL_GUIDANCE,
       inputSchema: {
         slug: z.string(),
         name: z.string().optional(),
@@ -349,6 +389,9 @@ export function registerTools(server: McpServer) {
           .string()
           .optional()
           .describe('Text yield, e.g. "4 servings"'),
+        prepTime: durationArg('Hands-on prep time'),
+        cookTime: durationArg('Cooking time'),
+        totalTime: durationArg('Total time'),
         ingredients: z
           .array(z.string())
           .optional()
@@ -373,6 +416,9 @@ export function registerTools(server: McpServer) {
       name,
       description,
       servings,
+      prepTime,
+      cookTime,
+      totalTime,
       ingredients,
       instructions,
       notes,
@@ -384,6 +430,9 @@ export function registerTools(server: McpServer) {
       if (name !== undefined) patch.name = name
       if (description !== undefined) patch.description = description
       if (servings !== undefined) patch.recipeYield = servings
+      if (prepTime !== undefined) patch.prepTime = isoToMealieTime(prepTime)
+      if (cookTime !== undefined) patch.performTime = isoToMealieTime(cookTime)
+      if (totalTime !== undefined) patch.totalTime = isoToMealieTime(totalTime)
       if (ingredients)
         patch.recipeIngredient = ingredients.map((note) => ({
           note,
@@ -413,6 +462,23 @@ export function registerTools(server: McpServer) {
         parseIngredients,
       )
       return json({ createdOrganizers, parsing, recipe: recipeDetail(recipe) })
+    },
+  )
+
+  server.registerTool(
+    'delete_recipe',
+    {
+      title: 'Delete recipe',
+      description:
+        'Permanently delete a recipe, for example the old combined recipe after splitting it into a main and sides. Check the meal plan first: entries that pointed at it lose their recipe. This cannot be undone.',
+      inputSchema: {
+        slug: z.string().describe('Recipe slug from search_recipes'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    async ({ slug }) => {
+      const r = await mealie('DELETE', `/recipes/${encodeURIComponent(slug)}`)
+      return json({ deleted: r?.slug ?? slug, name: r?.name })
     },
   )
 
@@ -650,7 +716,8 @@ export function registerTools(server: McpServer) {
     {
       title: 'Add to meal plan',
       description:
-        'Plan a meal on a date. Give recipeId (from search_recipes) for a saved recipe, or a title for a free-text entry like "Leftovers".',
+        'Plan a recipe on a date. Give recipeId (from search_recipes) for a saved recipe, or a title for a free-text entry like "Leftovers". Add one entry per dish: a main and its sides each get their own entry with the same date and entryType. ' +
+        MEAL_GUIDANCE,
       inputSchema: {
         date,
         entryType,
