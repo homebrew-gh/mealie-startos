@@ -261,7 +261,7 @@ function recipeDetail(r: any) {
     yield: r.recipeYield || undefined,
     prepTime: r.prepTime || undefined,
     cookTime: r.performTime || r.cookTime || undefined,
-    nutritionPerServing: nutritionDetail(r),
+    nutrition: nutritionDetail(r),
     ingredients: (r.recipeIngredient ?? []).map(
       (i: any) => i.display || i.originalText || i.note || '',
     ),
@@ -346,7 +346,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Get recipe',
       description:
-        'Get one recipe with its ingredients, instructions, notes, categories, tags and when it was last made.',
+        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Fields that are not set are left out, so use this to confirm what was saved.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id) from search_recipes'),
       },
