@@ -1,0 +1,49 @@
+name: Release
+
+# Push a tag named after the package version in startos/versions/current.ts:
+# version 3.31.0:2 -> tag v3.31.0_2. This builds x86_64 and aarch64 .s9pk
+# files, signs them with the DEV_KEY secret, and attaches them to a GitHub
+# Release. Nothing is published to a StartOS registry.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: package-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read the package version
+        id: version
+        uses: Start9Labs/start-technologies/.github/actions/extract-version@master
+      - name: Tag must match the package version
+        env:
+          EXPECTED: ${{ steps.version.outputs.tag }}
+          ACTUAL: ${{ github.ref_name }}
+          HAS_KEY: ${{ secrets.DEV_KEY != '' }}
+        run: |
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Tag $ACTUAL does not match package version ${{ steps.version.outputs.version }}. Tag the release $EXPECTED instead."
+            exit 1
+          fi
+          if [ "$HAS_KEY" != true ]; then
+            echo "::error::The DEV_KEY repository secret is not set. See 'Releasing' in README.md."
+            exit 1
+          fi
+
+  release:
+    needs: check-tag
+    permissions:
+      contents: write
+    uses: Start9Labs/start-technologies/.github/workflows/release.yml@master
+    secrets:
+      DEV_KEY: ${{ secrets.DEV_KEY }}
