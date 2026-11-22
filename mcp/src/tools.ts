@@ -64,7 +64,11 @@ const MEAL_GUIDANCE =
   'To plan a meal, add the main and each side to the meal plan on the same date with the same entryType (for example all "dinner"); the YesChef app cooks everything in one slot as a single timeline. ' +
   'Set prepTime and cookTime on every recipe, because the timeline is scheduled from them.'
 
-/** ISO 8601 duration ("PT1H30M") to Mealie's stored text ("1 hour 30 minutes"). */
+/**
+ * ISO 8601 duration ("PT1H30M") to Mealie's stored text ("1 hour 30 minutes").
+ * A zero duration (PT0M) becomes "0 minutes", so a no-cook recipe shows an
+ * explicit zero rather than a blank that reads as "unknown".
+ */
 function isoToMealieTime(iso: string): string {
   const m = iso
     .trim()
@@ -79,14 +83,16 @@ function isoToMealieTime(iso: string): string {
   add(m[2], 'hour')
   add(m[3], 'minute')
   add(m[4], 'second')
-  return parts.join(' ')
+  return parts.length ? parts.join(' ') : '0 minutes'
 }
 
 const durationArg = (what: string) =>
   z
     .string()
     .optional()
-    .describe(`${what} as an ISO 8601 duration, e.g. PT15M or PT1H30M`)
+    .describe(
+      `${what} as an ISO 8601 duration, e.g. PT15M or PT1H30M. Use PT0M for none (a no-cook sauce has cookTime PT0M).`,
+    )
 
 const categoriesArg = z
   .array(z.string())
@@ -103,6 +109,19 @@ const tagsArg = z
     "Tag names; replaces the recipe's tags. Missing ones are created. " +
       ORGANIZING_SCHEME,
   )
+
+/** The time fields of a PATCH body, from ISO 8601 durations. */
+function timePatch(t: {
+  prepTime?: string
+  cookTime?: string
+  totalTime?: string
+}) {
+  const patch: Record<string, string> = {}
+  if (t.prepTime !== undefined) patch.prepTime = isoToMealieTime(t.prepTime)
+  if (t.cookTime !== undefined) patch.performTime = isoToMealieTime(t.cookTime)
+  if (t.totalTime !== undefined) patch.totalTime = isoToMealieTime(t.totalTime)
+  return patch
+}
 
 /** Sets a recipe's categories and/or tags by name, creating missing ones. */
 async function setOrganizers(
@@ -319,15 +338,9 @@ export function registerTools(server: McpServer) {
           ),
         instructions: z.array(z.string()).describe('One step per entry'),
         servings: z.string().optional().describe('e.g. "4 servings"'),
-        prepTime: z
-          .string()
-          .optional()
-          .describe('ISO 8601 duration, e.g. PT15M'),
-        cookTime: z
-          .string()
-          .optional()
-          .describe('ISO 8601 duration, e.g. PT1H'),
-        totalTime: z.string().optional().describe('ISO 8601 duration'),
+        prepTime: durationArg('Hands-on prep time'),
+        cookTime: durationArg('Cooking time'),
+        totalTime: durationArg('Total time'),
         categories: categoriesArg,
         tags: tagsArg,
         sourceUrl: z.url().optional(),
@@ -361,6 +374,13 @@ export function registerTools(server: McpServer) {
           },
         },
       )
+      // Mealie's JSON import doesn't keep the times, so set them directly.
+      const times = timePatch(a)
+      if (Object.keys(times).length) {
+        await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
+          body: times,
+        })
+      }
       const createdOrganizers = await setOrganizers(slug, a.categories, a.tags)
       const { recipe, parsing } = await parseAfterSave(slug, a.parseIngredients)
       return json({
@@ -430,9 +450,7 @@ export function registerTools(server: McpServer) {
       if (name !== undefined) patch.name = name
       if (description !== undefined) patch.description = description
       if (servings !== undefined) patch.recipeYield = servings
-      if (prepTime !== undefined) patch.prepTime = isoToMealieTime(prepTime)
-      if (cookTime !== undefined) patch.performTime = isoToMealieTime(cookTime)
-      if (totalTime !== undefined) patch.totalTime = isoToMealieTime(totalTime)
+      Object.assign(patch, timePatch({ prepTime, cookTime, totalTime }))
       if (ingredients)
         patch.recipeIngredient = ingredients.map((note) => ({
           note,
