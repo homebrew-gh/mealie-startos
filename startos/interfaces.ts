@@ -1,7 +1,15 @@
 import { i18n } from './i18n'
+import { mcpUrl } from './mcpUrl'
 import { primaryUrl } from './primaryUrl'
 import { sdk } from './sdk'
-import { mainHostId, uiPort, webuiInterfaceId } from './utils'
+import {
+  mainHostId,
+  mcpHostId,
+  mcpInterfaceId,
+  mcpPort,
+  uiPort,
+  webuiInterfaceId,
+} from './utils'
 
 // One interface serves both the web UI and the REST API (under /api, docs at
 // /docs). StartOS publishes it on every LAN address — including the one the
@@ -29,5 +37,25 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
 
   const receipt = await origin.export([webui])
 
-  return [receipt]
+  // The AI connector gets its own host, so it can be given a public domain
+  // (e.g. through StartTunnel) while Mealie itself stays private.
+  const mcpMulti = sdk.MultiHost.of(effects, mcpHostId)
+  const mcpOrigin = await mcpMulti.bindPort(mcpPort, { protocol: 'http' })
+  const mcp = sdk.createInterface(effects, {
+    name: i18n('AI Connector (MCP)'),
+    id: mcpInterfaceId,
+    description: i18n(
+      'MCP server for AI assistants, at /mcp. Give it a public domain to use it from Claude and other cloud assistants. Sign-in needs the connector password.',
+    ),
+    type: 'api',
+    masked: false,
+    schemeOverride: null,
+    username: null,
+    path: '/mcp',
+    query: {},
+    preferredLauncherAddress: await mcpUrl.bestUsable(effects).const(),
+  })
+  const mcpReceipt = await mcpOrigin.export([mcp])
+
+  return [receipt, mcpReceipt]
 })

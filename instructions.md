@@ -34,12 +34,26 @@ Current Mealie versions set this up inside Mealie, not with the old `OPENAI_*` e
 
 Any address StartOS lists for the interface works, including your box's LAN address when you are connected over the StartOS WireGuard VPN. HTTPS addresses use your server's own certificate authority, so a device or program that talks to Mealie over HTTPS must trust your **Root CA**: download it from StartOS and install it on the device, as described in the StartOS guide to trusting your Root CA (on Android it goes in **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**). Plain-HTTP LAN addresses don't need it, but send your token unencrypted.
 
+## AI connector (Claude and other cloud assistants)
+
+The package includes an optional MCP server that lets AI assistants search and read your recipes, add new ones, and manage meal plans and shopping lists. It has its own **AI Connector (MCP)** interface, so you can put just the connector on the internet and keep Mealie private.
+
+1. In Mealie, create an API token (profile → **API Tokens**). The connector acts as that user.
+2. Give the **AI Connector (MCP)** interface a public domain: on its interface page, in your StartTunnel gateway's address table, choose **Add Domain → Public Domain**, enter a domain such as `mealie-mcp.example.com`, and pick **Let's Encrypt** so cloud services trust the certificate. Point the domain's DNS at your StartTunnel server's public IP. See the StartOS guide to [clearnet access](https://docs.start9.com/start-os/0.4.0.x/user-manual/public-access/clearnet.html).
+3. Run **Set AI Connector URL** and choose that domain.
+4. Run **Configure AI Connector**: turn it on, paste the Mealie API token, and set (or generate) a connector password. Save the password somewhere safe.
+5. In Claude on the web, go to **Settings → Connectors → Add custom connector** and enter `https://<your domain>/mcp`. Claude opens an approval page on your box: enter the connector password and click **Allow access**. The connector then also works in the Claude mobile apps.
+
+Only someone who knows the connector password can connect an assistant. Five wrong passwords lock the approval page for 15 minutes. To cut off every connected assistant, change the connector password and also revoke the Mealie API token if you think it leaked.
+
 ## Actions
 
 - **Set Primary URL** chooses the address used in links Mealie generates.
 - **Set Time Zone** sets the server time zone, for example `America/New_York`.
 - **Enable / Disable Open Sign-up** lets anyone who can reach Mealie create an account without an invitation. Leave it off unless you are letting a few people sign up, then turn it off again.
+- **Configure AI Connector** turns the MCP server on or off and sets its Mealie API token and connector password.
+- **Set AI Connector URL** chooses the public HTTPS address the connector answers on.
 
 ## Backups
 
-StartOS backups include everything: recipes, images, meal plans, shopping lists, users, API tokens and AI provider settings. Mealie also makes its own backup zips from its admin page. Those are saved in its data folder and so are inside StartOS backups too, but they are not a copy kept somewhere else.
+StartOS backups include everything: recipes, images, meal plans, shopping lists, users, API tokens, AI provider settings, and the AI connector's settings and sign-ins. Mealie also makes its own backup zips from its admin page. Those are saved in its data folder and so are inside StartOS backups too, but they are not a copy kept somewhere else.

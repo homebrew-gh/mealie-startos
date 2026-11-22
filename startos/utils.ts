@@ -20,3 +20,15 @@ export const dataMount = sdk.Mounts.of().mountVolume({
 })
 
 export const defaultTimezone = 'UTC'
+
+// AI connector (MCP server)
+export const mcpPort = 8000 as const
+export const mcpHostId = 'mcp'
+export const mcpInterfaceId = 'mcp'
+
+export const mcpMount = sdk.Mounts.of().mountVolume({
+  volumeId: 'mcp',
+  subpath: null,
+  mountpoint: '/data',
+  readonly: false,
+})
