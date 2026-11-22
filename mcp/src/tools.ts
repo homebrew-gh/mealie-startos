@@ -8,6 +8,11 @@ import {
   parseLines,
   parseRecipe,
 } from './ingredients.js'
+import {
+  listOrganizers,
+  ORGANIZING_SCHEME,
+  resolveOrganizers,
+} from './organizers.js'
 
 const parserArg = z
   .enum(['openai', 'nlp', 'brute'])
@@ -44,6 +49,60 @@ async function parseAfterSave(slug: string, parse: boolean | undefined) {
       recipe: await mealie('GET', `/recipes/${slug}`),
       parsing: { error: String((err as Error).message ?? err) },
     }
+  }
+}
+
+const categoriesArg = z
+  .array(z.string())
+  .optional()
+  .describe(
+    "Category names; replaces the recipe's categories. Missing ones are created. " +
+      ORGANIZING_SCHEME,
+  )
+
+const tagsArg = z
+  .array(z.string())
+  .optional()
+  .describe(
+    "Tag names; replaces the recipe's tags. Missing ones are created. " +
+      ORGANIZING_SCHEME,
+  )
+
+/** Sets a recipe's categories and/or tags by name, creating missing ones. */
+async function setOrganizers(
+  slug: string,
+  categories: string[] | undefined,
+  tags: string[] | undefined,
+) {
+  const patch: Record<string, unknown> = {}
+  const created: { categories?: string[]; tags?: string[] } = {}
+  if (categories) {
+    const r = await resolveOrganizers('categories', categories)
+    patch.recipeCategory = r.organizers
+    if (r.created.length) created.categories = r.created
+  }
+  if (tags) {
+    const r = await resolveOrganizers('tags', tags)
+    patch.tags = r.organizers
+    if (r.created.length) created.tags = r.created
+  }
+  if (!Object.keys(patch).length) return undefined
+  await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
+    body: patch,
+  })
+  return created
+}
+
+/** When this household last made a recipe, or undefined. */
+async function lastMade(slug: string): Promise<string | undefined> {
+  try {
+    const r = await mealie(
+      'GET',
+      `/households/self/recipes/${encodeURIComponent(slug)}`,
+    )
+    return r?.lastMade ?? undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -167,18 +226,16 @@ export function registerTools(server: McpServer) {
     {
       title: 'Get recipe',
       description:
-        'Get one recipe with its ingredients, instructions and notes.',
+        'Get one recipe with its ingredients, instructions, notes, categories, tags and when it was last made.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id) from search_recipes'),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ slug }) =>
-      json(
-        recipeDetail(
-          await mealie('GET', `/recipes/${encodeURIComponent(slug)}`),
-        ),
-      ),
+    async ({ slug }) => {
+      const r = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
+      return json({ ...recipeDetail(r), lastMade: await lastMade(r.slug) })
+    },
   )
 
   server.registerTool(
@@ -210,7 +267,8 @@ export function registerTools(server: McpServer) {
     {
       title: 'Create recipe',
       description:
-        'Save a new recipe you have written or transcribed. Mealie parses it like a schema.org Recipe. Returns the new slug.',
+        'Save a new recipe you have written or transcribed. Mealie parses it like a schema.org Recipe. Returns the new slug. Give it a category and tags so it is filed in the cookbook. ' +
+        ORGANIZING_SCHEME,
       inputSchema: {
         name: z.string(),
         description: z.string().optional(),
@@ -228,7 +286,8 @@ export function registerTools(server: McpServer) {
           .optional()
           .describe('ISO 8601 duration, e.g. PT1H'),
         totalTime: z.string().optional().describe('ISO 8601 duration'),
-        keywords: z.array(z.string()).optional().describe('Imported as tags'),
+        categories: categoriesArg,
+        tags: tagsArg,
         sourceUrl: z.url().optional(),
         parseIngredients: parseArg,
       },
@@ -248,7 +307,6 @@ export function registerTools(server: McpServer) {
         prepTime: a.prepTime,
         cookTime: a.cookTime,
         totalTime: a.totalTime,
-        keywords: a.keywords?.join(', '),
       }
       const slug = await mealie<string>(
         'POST',
@@ -257,12 +315,18 @@ export function registerTools(server: McpServer) {
           body: {
             data: JSON.stringify(schemaOrg),
             url: a.sourceUrl,
-            includeTags: Boolean(a.keywords?.length),
+            includeTags: false,
           },
         },
       )
+      const createdOrganizers = await setOrganizers(slug, a.categories, a.tags)
       const { recipe, parsing } = await parseAfterSave(slug, a.parseIngredients)
-      return json({ slug, parsing, recipe: recipeDetail(recipe) })
+      return json({
+        slug,
+        createdOrganizers,
+        parsing,
+        recipe: recipeDetail(recipe),
+      })
     },
   )
 
@@ -271,7 +335,8 @@ export function registerTools(server: McpServer) {
     {
       title: 'Update recipe',
       description:
-        'Change fields of an existing recipe. Only the fields you pass are changed. Ingredients and instructions, if given, replace the existing lists.',
+        "Change fields of an existing recipe. Only the fields you pass are changed. Ingredients, instructions, notes, categories and tags, if given, replace the existing lists, so to add a tag pass the recipe's current tags plus the new one. " +
+        ORGANIZING_SCHEME,
       inputSchema: {
         slug: z.string(),
         name: z.string().optional(),
@@ -292,6 +357,8 @@ export function registerTools(server: McpServer) {
           .array(z.object({ title: z.string().optional(), text: z.string() }))
           .optional()
           .describe('Replaces all notes'),
+        categories: categoriesArg,
+        tags: tagsArg,
         parseIngredients: parseArg,
       },
     },
@@ -303,6 +370,8 @@ export function registerTools(server: McpServer) {
       ingredients,
       instructions,
       notes,
+      categories,
+      tags,
       parseIngredients,
     }) => {
       const patch: Record<string, unknown> = {}
@@ -319,12 +388,25 @@ export function registerTools(server: McpServer) {
         patch.recipeInstructions = instructions.map((text) => ({ text }))
       if (notes)
         patch.notes = notes.map((n) => ({ title: n.title ?? '', text: n.text }))
-      const r = await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
-        body: patch,
-      })
-      if (!ingredients) return json(recipeDetail(r))
-      const { recipe, parsing } = await parseAfterSave(r.slug, parseIngredients)
-      return json({ parsing, recipe: recipeDetail(recipe) })
+      let current = slug
+      if (Object.keys(patch).length) {
+        const r = await mealie(
+          'PATCH',
+          `/recipes/${encodeURIComponent(slug)}`,
+          { body: patch },
+        )
+        current = r.slug
+      }
+      const createdOrganizers = await setOrganizers(current, categories, tags)
+      if (!ingredients) {
+        const r = await mealie('GET', `/recipes/${encodeURIComponent(current)}`)
+        return json({ createdOrganizers, recipe: recipeDetail(r) })
+      }
+      const { recipe, parsing } = await parseAfterSave(
+        current,
+        parseIngredients,
+      )
+      return json({ createdOrganizers, parsing, recipe: recipeDetail(recipe) })
     },
   )
 
@@ -390,6 +472,80 @@ export function registerTools(server: McpServer) {
           note: l.note || undefined,
           confidence: l.confidence,
         })),
+      })
+    },
+  )
+
+  server.registerTool(
+    'list_organizers',
+    {
+      title: 'List recipe categories and tags',
+      description:
+        'List the recipe categories and tags that exist, with how many recipes use each. Check this before tagging so you reuse existing names. ' +
+        ORGANIZING_SCHEME,
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const shape = (o: any) => ({
+        name: o.name,
+        slug: o.slug,
+        recipes: o.recipeCount ?? undefined,
+      })
+      const [categories, tags] = await Promise.all([
+        listOrganizers('categories'),
+        listOrganizers('tags'),
+      ])
+      return json({
+        categories: categories.map(shape),
+        tags: tags.map(shape),
+      })
+    },
+  )
+
+  server.registerTool(
+    'mark_cooked',
+    {
+      title: 'Mark recipe as cooked',
+      description:
+        'Record that a recipe was made, like Mealie\'s "I made this" button: adds an entry to the recipe\'s timeline and updates its last-made date.',
+      inputSchema: {
+        slug: z.string().describe('Recipe slug (or id)'),
+        date: date
+          .optional()
+          .describe('Day it was made, YYYY-MM-DD (default today)'),
+        note: z
+          .string()
+          .optional()
+          .describe('Optional comment, e.g. "Doubled the garlic"'),
+      },
+    },
+    async ({ slug, date, note }) => {
+      const recipe = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
+      // Noon UTC keeps the chosen day the same in every time zone.
+      const timestamp = date ? `${date}T12:00:00Z` : new Date().toISOString()
+      await mealie('POST', '/recipes/timeline/events', {
+        body: {
+          recipeId: recipe.id,
+          subject: 'Made this',
+          eventType: 'comment',
+          eventMessage: note ?? '',
+          timestamp,
+        },
+      })
+      const previous = await lastMade(recipe.slug)
+      if (!previous || new Date(previous) < new Date(timestamp)) {
+        await mealie(
+          'PATCH',
+          `/recipes/${encodeURIComponent(recipe.slug)}/last-made`,
+          { body: { timestamp } },
+        )
+      }
+      return json({
+        slug: recipe.slug,
+        name: recipe.name,
+        madeOn: timestamp,
+        lastMade: (await lastMade(recipe.slug)) ?? timestamp,
       })
     },
   )
