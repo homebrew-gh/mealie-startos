@@ -79,7 +79,7 @@ Optional second daemon, started only when **Configure AI Connector** has it enab
 - Streamable HTTP, stateless, at `POST /mcp`.
 - Its own OAuth 2.1 authorization server (via the SDK's `mcpAuthRouter`): RFC 8414 + RFC 9728 metadata, Dynamic Client Registration, PKCE S256, rotating refresh tokens (90 days), 1-hour access tokens bound to the `/mcp` resource. Approval is a password page; 5 failures in 15 minutes locks it. Built for claude.ai custom connectors, which need DCR (or CIMD) and call from Anthropic's cloud.
 - Calls Mealie at `http://127.0.0.1:9000/api` with the configured API token.
-- Tools: `search_recipes`, `get_recipe`, `import_recipe_from_url`, `create_recipe`, `update_recipe`, `parse_recipe_ingredients`, `parse_ingredients`, `list_organizers`, `mark_cooked`, `list_meal_plan`, `add_meal_plan_entry`, `remove_meal_plan_entry`, `list_shopping_lists`, `get_shopping_list`, `create_shopping_list`, `add_shopping_list_items`, `add_recipe_to_shopping_list`, `set_shopping_item_checked`, `set_shopping_item_store_section`, `remove_shopping_item`, `list_store_sections`, `set_food_store_section`.
+- Tools: `search_recipes`, `get_recipe`, `import_recipe_from_url`, `create_recipe`, `update_recipe`, `parse_recipe_ingredients`, `parse_ingredients`, `list_organizers`, `mark_cooked`, `list_meal_plan`, `add_meal_plan_entry`, `remove_meal_plan_entry`, `list_shopping_lists`, `get_shopping_list`, `create_shopping_list`, `add_shopping_list_items`, `add_recipe_to_shopping_list`, `add_meal_plan_to_shopping_list`, `clear_shopping_list`, `set_shopping_item_checked`, `set_shopping_item_store_section`, `remove_shopping_item`, `list_store_sections`, `set_food_store_section`.
 - Ingredient parsing: recipes created, imported or given new ingredients through the connector are run through Mealie's parser (`POST /api/parser/ingredients`, `openai` first, falling back to `nlp`) and linked to foods and units, creating missing ones. Store sections are Mealie labels on foods; shopping items inherit them, which is what sorts a list by aisle.
 - Organizing: `create_recipe` and `update_recipe` take category and tag names, resolved against `/api/organizers/categories` and `/api/organizers/tags` and created when missing. Tool descriptions carry the scheme the YesChef app uses: one category per recipe as its chapter (Mains, Sides, Soups & Salads, Breakfast, Desserts, Baking, Starters & Snacks, Drinks, Sauces & Basics), tags for protein and cooking style. `mark_cooked` adds a timeline event and sets the household's last-made date (`PATCH /api/recipes/{slug}/last-made`), like Mealie's "I made this".
 - Health check: `GET /healthz`.
@@ -123,17 +123,13 @@ CI: `.github/workflows/build.yml` builds both architectures on every pull reques
 
 ## Releasing
 
-`.github/workflows/release.yml` runs when a tag starting with `v` is pushed. It checks that the tag matches the version in `startos/versions/current.ts` (`3.31.0:2` must be tagged `v3.31.0_2`), builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
+`.github/workflows/release.yml` releases the version in `startos/versions/current.ts` (`3.31.0:4` is tagged `v3.31.0_4`): it builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
+
+It runs when a change to `current.ts` lands on `main` and that version has no tag yet (it creates the tag itself), or when someone pushes a `v*` tag by hand (the tag must match `current.ts`).
 
 One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). `start-cli init-key` makes one at `~/.startos/developer.key.pem`. Paste the whole file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key, because users trust it by its public key (`start-cli pubkey` prints it; it is published in `signing-key.pub.pem` and under Installing). If the key ever changes, update both.
 
-To release: bump the version as in `UPDATING.md`, merge, then tag `main` and push the tag:
-
-```
-git checkout main && git pull
-git tag v3.31.0_2
-git push origin v3.31.0_2
-```
+To release: bump the version as in `UPDATING.md` in a pull request and merge it. Nothing else is needed.
 
 ### Automatic updates
 

@@ -78,6 +78,10 @@ This works best if Mealie has a starter set of foods, units and store sections (
 
 Assistants can file recipes into categories and tags and record when you cooked something. By default they use one category per recipe as its cookbook chapter (Mains, Sides, Soups & Salads, Breakfast, Desserts, Baking, Starters & Snacks, Drinks, Sauces & Basics), and tags for the main protein (Chicken, Beef, Pork, Lamb, Seafood, Vegetarian, Vegan) and cooking style (Quick, Slow cooker, Grill, One pot, Make ahead). Missing categories and tags are created. You can ask for something like "sort all my recipes into chapters and tag them by protein" or "I made the chili last night".
 
+### A shopping list for your assistant
+
+An assistant can keep its own shopping list, for example "Weekly meals", without touching your other lists. It can empty that one list in a single step and refill it from every recipe on the meal plan for a date range.
+
 ### Security
 
 Only someone who knows the connector password can connect an assistant. Five wrong passwords lock the approval page for 15 minutes. A connected assistant can do anything the connector's tools allow, as the Mealie user whose token you gave it, but it can't reach Mealie's admin pages or anything else on your box.

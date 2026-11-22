@@ -1,49 +1,79 @@
 name: Release
 
-# Push a tag named after the package version in startos/versions/current.ts:
-# version 3.31.0:2 -> tag v3.31.0_2. This builds x86_64 and aarch64 .s9pk
-# files, signs them with the DEV_KEY secret, and attaches them to a GitHub
-# Release. Nothing is published to a StartOS registry.
+# Releases the version in startos/versions/current.ts (3.31.0:4 -> tag
+# v3.31.0_4): builds x86_64 and aarch64 .s9pk files, signs them with the
+# DEV_KEY secret, and attaches them to a GitHub Release. Nothing is published
+# to a StartOS registry.
+#
+# Runs when:
+# - a pull request that changes current.ts is merged to main and that
+#   version has no tag yet: the tag is created here, so no manual step;
+# - someone pushes a v* tag by hand: the tag must match current.ts.
 
 on:
   push:
+    branches: ['main']
+    paths: ['startos/versions/current.ts']
     tags: ['v*']
 
 permissions: {}
 
 concurrency:
-  group: package-release-${{ github.ref }}
+  group: package-release
   cancel-in-progress: false
 
 jobs:
-  check-tag:
+  prepare:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      release: ${{ steps.decide.outputs.release }}
     steps:
       - uses: actions/checkout@v6
       - name: Read the package version
         id: version
         uses: Start9Labs/start-technologies/.github/actions/extract-version@master
-      - name: Tag must match the package version
+      - name: Decide what to release
+        id: decide
         env:
           EXPECTED: ${{ steps.version.outputs.tag }}
-          ACTUAL: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
           HAS_KEY: ${{ secrets.DEV_KEY != '' }}
         run: |
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error::Tag $ACTUAL does not match package version ${{ steps.version.outputs.version }}. Tag the release $EXPECTED instead."
-            exit 1
-          fi
           if [ "$HAS_KEY" != true ]; then
             echo "::error::The DEV_KEY repository secret is not set. See 'Releasing' in README.md."
             exit 1
           fi
+          if [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "$EXPECTED" ]; then
+              echo "::error::Tag $REF_NAME does not match package version $VERSION. Tag the release $EXPECTED instead."
+              exit 1
+            fi
+          else
+            if git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED" > /dev/null; then
+              echo "Tag $EXPECTED already exists; nothing new to release."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # A tag pushed with the workflow token doesn't start this workflow
+            # again, so the release job below is the only run.
+            git tag "$EXPECTED"
+            git push origin "refs/tags/$EXPECTED"
+          fi
+          echo "tag=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
   release:
-    needs: check-tag
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     permissions:
       contents: write
     uses: Start9Labs/start-technologies/.github/workflows/release.yml@master
+    with:
+      TAG: ${{ needs.prepare.outputs.tag }}
     secrets:
       DEV_KEY: ${{ secrets.DEV_KEY }}
