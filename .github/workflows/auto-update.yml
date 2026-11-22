@@ -1,0 +1,186 @@
+name: Auto-update Mealie
+
+# Once a day, look for a new upstream Mealie release. When there is one:
+#   1. bump the package on a branch (see UPDATING.md and
+#      .github/scripts/bump-mealie.mjs),
+#   2. tag that commit and run the release (build both architectures, sign,
+#      attach to a GitHub Release),
+#   3. only if the release succeeded, fast-forward main to it.
+# If anything fails, or the new version is a major-version jump, nothing is
+# released, main is left alone, and an issue explains what happened.
+
+on:
+  schedule:
+    - cron: '23 13 * * *' # daily, early morning US time
+  workflow_dispatch:
+    inputs:
+      allow_major:
+        description: 'Also release a new major version of Mealie'
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: auto-update-mealie
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      update: ${{ steps.check.outputs.update }}
+      tag: ${{ steps.push.outputs.tag }}
+      latest: ${{ steps.check.outputs.latest }}
+      current: ${{ steps.check.outputs.current }}
+      branch: ${{ steps.check.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Compare with the latest Mealie release
+        id: check
+        env:
+          ALLOW_MAJOR: ${{ inputs.allow_major || false }}
+        run: |
+          LATEST=$(gh release view -R mealie-recipes/mealie --json tagName -q .tagName)
+          CURRENT=$(grep -oP "ghcr\.io/mealie-recipes/mealie:\Kv[^'\"]+" startos/manifest/index.ts)
+          echo "Packaged: $CURRENT, latest upstream: $LATEST"
+          if ! [[ "$LATEST" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::Latest upstream tag $LATEST is not a plain vX.Y.Z release; skipping."
+            exit 0
+          fi
+          NEWEST=$(printf '%s\n%s\n' "$CURRENT" "$LATEST" | sort -V | tail -1)
+          if [ "$LATEST" = "$CURRENT" ] || [ "$NEWEST" != "$LATEST" ]; then
+            echo "Up to date."
+            exit 0
+          fi
+          BRANCH="auto-update/mealie-$LATEST"
+          FAILED="Auto-update to Mealie $LATEST failed"
+          if [ -n "$(gh issue list --state open --search "in:title \"$FAILED\"" --json number -q '.[].number')" ]; then
+            echo "An earlier attempt at $LATEST failed and its issue is still open. Close the issue to retry."
+            exit 0
+          fi
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "$BRANCH already exists from an earlier attempt. Delete the branch to retry."
+            exit 0
+          fi
+          MAJOR_NEW=${LATEST#v}; MAJOR_NEW=${MAJOR_NEW%%.*}
+          MAJOR_OLD=${CURRENT#v}; MAJOR_OLD=${MAJOR_OLD%%.*}
+          if [ "$MAJOR_NEW" != "$MAJOR_OLD" ] && [ "$ALLOW_MAJOR" != true ]; then
+            TITLE="Mealie $LATEST is a new major version"
+            if [ -z "$(gh issue list --state open --search "in:title \"$TITLE\"" --json number -q '.[].number')" ]; then
+              gh issue create --title "$TITLE" --body "Mealie [$LATEST](https://github.com/mealie-recipes/mealie/releases/tag/$LATEST) is out, but this package is on $CURRENT. Major versions can change the database or settings, so the daily auto-update does not release them on its own.
+
+          Read the upstream release notes and the checks in \`UPDATING.md\`. To release it anyway, run the **Auto-update Mealie** workflow from the Actions tab with **Also release a new major version of Mealie** ticked, then close this issue."
+            fi
+            echo "::warning::$LATEST is a major-version jump; opened an issue instead of releasing."
+            exit 0
+          fi
+          {
+            echo "update=true"
+            echo "latest=$LATEST"
+            echo "current=$CURRENT"
+            echo "branch=$BRANCH"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.update == 'true'
+        with:
+          node-version: 22
+
+      - name: Bump the package
+        if: steps.check.outputs.update == 'true'
+        run: |
+          npm ci
+          node .github/scripts/bump-mealie.mjs "${{ steps.check.outputs.latest }}"
+          npx tsc --noEmit
+
+      - name: Commit, push the branch and tag it
+        id: push
+        if: steps.check.outputs.update == 'true'
+        env:
+          LATEST: ${{ steps.check.outputs.latest }}
+          BRANCH: ${{ steps.check.outputs.branch }}
+        run: |
+          VERSION=$(grep -oP "version:\s*'\K[^']+" startos/versions/current.ts)
+          TAG="v${VERSION//:/_}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898333+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$BRANCH"
+          git add -A startos
+          git commit -m "Update Mealie to $LATEST"
+          git tag "$TAG"
+          # Pushes made with the workflow token don't start other workflows,
+          # so release.yml's tag trigger doesn't fire; the release job below
+          # runs the release instead.
+          git push origin "$BRANCH" "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: bump
+    if: needs.bump.outputs.update == 'true'
+    permissions:
+      contents: write
+    uses: Start9Labs/start-technologies/.github/workflows/release.yml@master
+    with:
+      TAG: ${{ needs.bump.outputs.tag }}
+    secrets:
+      DEV_KEY: ${{ secrets.DEV_KEY }}
+
+  finish:
+    needs: [bump, release]
+    if: always() && needs.bump.outputs.update == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RESULT: ${{ needs.release.result }}
+      TAG: ${{ needs.bump.outputs.tag }}
+      LATEST: ${{ needs.bump.outputs.latest }}
+      CURRENT: ${{ needs.bump.outputs.current }}
+      BRANCH: ${{ needs.bump.outputs.branch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Move main to the released commit
+        if: needs.release.result == 'success'
+        id: ff
+        run: |
+          git fetch origin "$BRANCH"
+          if git merge-base --is-ancestor origin/main "origin/$BRANCH" && git push origin "origin/$BRANCH:refs/heads/main"; then
+            git push origin --delete "$BRANCH"
+            echo "Released $TAG and moved main to it."
+          else
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report a main branch that could not be updated
+        if: steps.ff.outputs.moved == 'false'
+        run: |
+          gh issue create --title "Mealie $LATEST was released but main was not updated" --body "The auto-update released [$TAG](${{ github.server_url }}/${{ github.repository }}/releases/tag/$TAG), but could not fast-forward \`main\` to branch \`$BRANCH\` (main changed in the meantime, or it is protected). Merge \`$BRANCH\` into \`main\`, then delete the branch and close this issue. Run: $RUN_URL"
+
+      - name: Report a failed update
+        if: needs.release.result != 'success'
+        run: |
+          # Remove the tag (and any draft release) so the version can be retried.
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin --delete "$TAG" || true
+          gh issue create --title "Auto-update to Mealie $LATEST failed" --body "The daily auto-update tried to move the package from $CURRENT to Mealie [$LATEST](https://github.com/mealie-recipes/mealie/releases/tag/$LATEST), but the build or release did not succeed, so nothing was released and \`main\` is unchanged.
+
+          - Failed run: $RUN_URL
+          - The attempted change is on branch \`$BRANCH\`.
+
+          To retry, fix the problem (or ask Claude to), delete the branch \`$BRANCH\` if it exists, and close this issue. The next daily run then tries again. Until then the auto-update skips this version."
