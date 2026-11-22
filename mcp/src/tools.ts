@@ -123,6 +123,68 @@ function timePatch(t: {
   return patch
 }
 
+/** Friendly nutrition names mapped to Mealie's fields, with the unit Mealie shows. */
+const NUTRITION_FIELDS = {
+  calories: ['calories', 'kcal'],
+  protein: ['proteinContent', 'g'],
+  carbs: ['carbohydrateContent', 'g'],
+  fat: ['fatContent', 'g'],
+  saturatedFat: ['saturatedFatContent', 'g'],
+  transFat: ['transFatContent', 'g'],
+  unsaturatedFat: ['unsaturatedFatContent', 'g'],
+  fiber: ['fiberContent', 'g'],
+  sugar: ['sugarContent', 'g'],
+  sodium: ['sodiumContent', 'mg'],
+  cholesterol: ['cholesterolContent', 'mg'],
+} as const
+type NutritionKey = keyof typeof NUTRITION_FIELDS
+type Nutrition = Partial<Record<NutritionKey, number | null>>
+
+const nutritionArg = z
+  .object(
+    Object.fromEntries(
+      Object.entries(NUTRITION_FIELDS).map(([k, [, unit]]) => [
+        k,
+        z
+          .number()
+          .nonnegative()
+          .nullable()
+          .optional()
+          .describe(`${unit} per serving; null clears it`),
+      ]),
+    ) as Record<NutritionKey, z.ZodOptional<z.ZodNullable<z.ZodNumber>>>,
+  )
+  .optional()
+  .describe(
+    'Nutrition facts per serving, as plain numbers (calories in kcal, sodium and cholesterol in mg, the rest in grams). Only the fields you pass change. Estimate from the ingredients and servings if no label is given, and say it is an estimate in the description or a note.',
+  )
+
+/**
+ * The PATCH fields that set a recipe's nutrition: the current values merged
+ * with the given ones, plus the setting that shows nutrition on the recipe.
+ */
+function nutritionPatch(current: any, n: Nutrition) {
+  const nutrition: Record<string, string | null> = { ...(current.nutrition ?? {}) }
+  for (const [k, v] of Object.entries(n)) {
+    if (v === undefined) continue
+    const field = NUTRITION_FIELDS[k as NutritionKey][0]
+    nutrition[field] = v === null ? null : String(Math.round(v * 10) / 10)
+  }
+  return {
+    nutrition,
+    settings: { ...(current.settings ?? {}), showNutrition: true },
+  }
+}
+
+function nutritionDetail(r: any) {
+  const out: Record<string, number> = {}
+  for (const [k, [field]] of Object.entries(NUTRITION_FIELDS)) {
+    const v = parseFloat(r.nutrition?.[field])
+    if (!Number.isNaN(v)) out[k] = v
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
 /** Sets a recipe's categories and/or tags by name, creating missing ones. */
 async function setOrganizers(
   slug: string,
@@ -199,6 +261,7 @@ function recipeDetail(r: any) {
     yield: r.recipeYield || undefined,
     prepTime: r.prepTime || undefined,
     cookTime: r.performTime || r.cookTime || undefined,
+    nutritionPerServing: nutritionDetail(r),
     ingredients: (r.recipeIngredient ?? []).map(
       (i: any) => i.display || i.originalText || i.note || '',
     ),
@@ -343,6 +406,7 @@ export function registerTools(server: McpServer) {
         totalTime: durationArg('Total time'),
         categories: categoriesArg,
         tags: tagsArg,
+        nutrition: nutritionArg,
         sourceUrl: z.url().optional(),
         parseIngredients: parseArg,
       },
@@ -375,10 +439,17 @@ export function registerTools(server: McpServer) {
         },
       )
       // Mealie's JSON import doesn't keep the times, so set them directly.
-      const times = timePatch(a)
-      if (Object.keys(times).length) {
+      const extra: Record<string, unknown> = timePatch(a)
+      if (a.nutrition) {
+        const current = await mealie<any>(
+          'GET',
+          `/recipes/${encodeURIComponent(slug)}`,
+        )
+        Object.assign(extra, nutritionPatch(current, a.nutrition))
+      }
+      if (Object.keys(extra).length) {
         await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
-          body: times,
+          body: extra,
         })
       }
       const createdOrganizers = await setOrganizers(slug, a.categories, a.tags)
@@ -428,6 +499,7 @@ export function registerTools(server: McpServer) {
           .describe('Replaces all notes'),
         categories: categoriesArg,
         tags: tagsArg,
+        nutrition: nutritionArg,
         parseIngredients: parseArg,
       },
     },
@@ -444,6 +516,7 @@ export function registerTools(server: McpServer) {
       notes,
       categories,
       tags,
+      nutrition,
       parseIngredients,
     }) => {
       const patch: Record<string, unknown> = {}
@@ -451,6 +524,13 @@ export function registerTools(server: McpServer) {
       if (description !== undefined) patch.description = description
       if (servings !== undefined) patch.recipeYield = servings
       Object.assign(patch, timePatch({ prepTime, cookTime, totalTime }))
+      if (nutrition) {
+        const current = await mealie<any>(
+          'GET',
+          `/recipes/${encodeURIComponent(slug)}`,
+        )
+        Object.assign(patch, nutritionPatch(current, nutrition))
+      }
       if (ingredients)
         patch.recipeIngredient = ingredients.map((note) => ({
           note,
