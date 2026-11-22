@@ -8,6 +8,7 @@ import {
   parseLines,
   parseRecipe,
 } from './ingredients.js'
+import { splitLines } from './split.js'
 import {
   listOrganizers,
   ORGANIZING_SCHEME,
@@ -39,6 +40,7 @@ async function parseAfterSave(slug: string, parse: boolean | undefined) {
       parsing: {
         parser: r.parser,
         parsed: r.parsed,
+        splitLines: r.splitLines,
         createdFoods: r.createdFoods,
         createdUnits: r.createdUnits,
         lowConfidence: r.lowConfidence,
@@ -274,7 +276,9 @@ export function registerTools(server: McpServer) {
         description: z.string().optional(),
         ingredients: z
           .array(z.string())
-          .describe('One ingredient per entry, e.g. "2 cups flour"'),
+          .describe(
+            'One ingredient per entry, e.g. "2 cups flour". Put each food on its own entry: "salt, to taste" and "pepper, to taste", not "salt and pepper" (combined lines are split automatically when possible).',
+          ),
         instructions: z.array(z.string()).describe('One step per entry'),
         servings: z.string().optional().describe('e.g. "4 servings"'),
         prepTime: z
@@ -348,7 +352,9 @@ export function registerTools(server: McpServer) {
         ingredients: z
           .array(z.string())
           .optional()
-          .describe('Replaces all ingredients; one per entry'),
+          .describe(
+            'Replaces all ingredients; one per entry, and one food per entry ("salt, to taste" and "pepper, to taste", not "salt and pepper")',
+          ),
         instructions: z
           .array(z.string())
           .optional()
@@ -432,6 +438,7 @@ export function registerTools(server: McpServer) {
       return json({
         parser: r.parser,
         parsed: r.parsed,
+        splitLines: r.splitLines,
         createdFoods: r.createdFoods,
         createdUnits: r.createdUnits,
         lowConfidence: r.lowConfidence,
@@ -460,11 +467,19 @@ export function registerTools(server: McpServer) {
       annotations: { readOnlyHint: true },
     },
     async ({ lines, parser }) => {
-      const r = await parseLines(lines, parser)
+      const pieces = splitLines(lines)
+      const r = await parseLines(
+        pieces.map((p) => p.text),
+        parser,
+      )
       return json({
         parser: r.parser,
-        lines: r.lines.map((l) => ({
-          input: l.input,
+        lines: r.lines.map((l, k) => ({
+          input: lines[pieces[k].from],
+          splitAs:
+            pieces[k].text !== lines[pieces[k].from]
+              ? pieces[k].text
+              : undefined,
           quantity: l.quantity,
           unit: l.unit?.name,
           food: l.food?.name,

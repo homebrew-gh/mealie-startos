@@ -8,6 +8,7 @@
  * the API skip that step, so the connector runs it itself.
  */
 import { mealie } from './mealie.js'
+import { splitLines } from './split.js'
 
 export type Parser = 'openai' | 'nlp' | 'brute'
 
@@ -145,24 +146,33 @@ export async function parseRecipe(
       recipe,
     }
   }
+  // One food per line: "salt and pepper, to taste" becomes two ingredients.
+  const pieces = splitLines(todo.map((t) => t.text))
   const { parser, lines } = await parseLines(
-    todo.map((t) => t.text),
+    pieces.map((p) => p.text),
     opts.parser,
   )
   const linked = await toRecipeIngredients(lines)
-  const next = current.map((ing) => ({ ...ing }))
-  todo.forEach((t, k) => {
+  const replacements = new Map<number, any[]>()
+  pieces.forEach((p, k) => {
     const n = linked.ingredients[k]
-    next[t.index] = {
-      ...next[t.index],
+    const t = todo[p.from]
+    const list = replacements.get(t.index) ?? []
+    // The first piece keeps the original ingredient's other fields (such as
+    // its referenceId); extra pieces are new ingredients.
+    const base = list.length ? {} : t.ing
+    list.push({
+      ...base,
       quantity: n.quantity,
       unit: n.unit,
       food: n.food,
       note: n.note,
       originalText: n.originalText,
       display: '',
-    }
+    })
+    replacements.set(t.index, list)
   })
+  const next = current.flatMap((ing, index) => replacements.get(index) ?? [ing])
   const saved = await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
     body: { recipeIngredient: next },
   })
@@ -170,6 +180,7 @@ export async function parseRecipe(
     slug,
     parser,
     parsed: todo.length,
+    splitLines: pieces.length - todo.length || undefined,
     createdFoods: linked.createdFoods,
     createdUnits: linked.createdUnits,
     lowConfidence: lines

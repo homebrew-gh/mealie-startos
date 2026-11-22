@@ -1,10 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '3.31.0:4',
+  version: '3.31.0:5',
   releaseNotes: {
     en_US:
-      'AI connector: new add_meal_plan_to_shopping_list tool adds every planned recipe in a date range to a shopping list in one call, and clear_shopping_list empties one list (or just its checked-off items), so an assistant can keep its own weekly list.',
+      'AI connector: ingredient lines that combine foods, such as "salt and pepper, to taste", are now split into one ingredient per food before Mealie parses them, so each links to its own food. Foods with "and" in their name, such as half and half, are left alone.',
   },
   migrations: {
     up: async ({ effects }) => {},
