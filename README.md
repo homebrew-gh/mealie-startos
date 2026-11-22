@@ -123,17 +123,13 @@ CI: `.github/workflows/build.yml` builds both architectures on every pull reques
 
 ## Releasing
 
-`.github/workflows/release.yml` runs when a tag starting with `v` is pushed. It checks that the tag matches the version in `startos/versions/current.ts` (`3.31.0:2` must be tagged `v3.31.0_2`), builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
+`.github/workflows/release.yml` releases the version in `startos/versions/current.ts` (`3.31.0:4` is tagged `v3.31.0_4`): it builds both architectures with Start9's shared release workflow, signs them with the `DEV_KEY` secret and attaches them to a GitHub Release with the release notes and SHA-256 hashes. It does not publish to any StartOS registry.
+
+It runs when a change to `current.ts` lands on `main` and that version has no tag yet (it creates the tag itself), or when someone pushes a `v*` tag by hand (the tag must match `current.ts`).
 
 One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). `start-cli init-key` makes one at `~/.startos/developer.key.pem`. Paste the whole file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key, because users trust it by its public key (`start-cli pubkey` prints it; it is published in `signing-key.pub.pem` and under Installing). If the key ever changes, update both.
 
-To release: bump the version as in `UPDATING.md`, merge, then tag `main` and push the tag:
-
-```
-git checkout main && git pull
-git tag v3.31.0_2
-git push origin v3.31.0_2
-```
+To release: bump the version as in `UPDATING.md` in a pull request and merge it. Nothing else is needed.
 
 ### Automatic updates
 
