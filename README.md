@@ -56,7 +56,8 @@ Optional second daemon, started only when **Configure AI Connector** has it enab
 - Streamable HTTP, stateless, at `POST /mcp`.
 - Its own OAuth 2.1 authorization server (via the SDK's `mcpAuthRouter`): RFC 8414 + RFC 9728 metadata, Dynamic Client Registration, PKCE S256, rotating refresh tokens (90 days), 1-hour access tokens bound to the `/mcp` resource. Approval is a password page; 5 failures in 15 minutes locks it. Built for claude.ai custom connectors, which need DCR (or CIMD) and call from Anthropic's cloud.
 - Calls Mealie at `http://127.0.0.1:9000/api` with the configured API token.
-- Tools: `search_recipes`, `get_recipe`, `import_recipe_from_url`, `create_recipe`, `update_recipe`, `list_meal_plan`, `add_meal_plan_entry`, `remove_meal_plan_entry`, `list_shopping_lists`, `get_shopping_list`, `create_shopping_list`, `add_shopping_list_items`, `add_recipe_to_shopping_list`, `set_shopping_item_checked`, `remove_shopping_item`.
+- Tools: `search_recipes`, `get_recipe`, `import_recipe_from_url`, `create_recipe`, `update_recipe`, `parse_recipe_ingredients`, `parse_ingredients`, `list_meal_plan`, `add_meal_plan_entry`, `remove_meal_plan_entry`, `list_shopping_lists`, `get_shopping_list`, `create_shopping_list`, `add_shopping_list_items`, `add_recipe_to_shopping_list`, `set_shopping_item_checked`, `set_shopping_item_store_section`, `remove_shopping_item`, `list_store_sections`, `set_food_store_section`.
+- Ingredient parsing: recipes created, imported or given new ingredients through the connector are run through Mealie's parser (`POST /api/parser/ingredients`, `openai` first, falling back to `nlp`) and linked to foods and units, creating missing ones. Store sections are Mealie labels on foods; shopping items inherit them, which is what sorts a list by aisle.
 - Health check: `GET /healthz`.
 
 ## Actions

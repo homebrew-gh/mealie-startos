@@ -1,10 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '3.31.0:1',
+  version: '3.31.0:2',
   releaseNotes: {
     en_US:
-      'Adds an optional AI connector: an MCP server, on its own interface, that lets Claude and other AI assistants read and change your recipes, meal plans and shopping lists. It is off until you configure it.',
+      "AI connector: recipes created or imported by an assistant now go through Mealie's ingredient parser, and assistants can set store sections (aisles) on foods and shopping items so lists sort by aisle.",
   },
   migrations: {
     up: async ({ effects }) => {},

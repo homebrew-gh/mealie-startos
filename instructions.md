@@ -44,6 +44,8 @@ The package includes an optional MCP server that lets AI assistants search and r
 4. Run **Configure AI Connector**: turn it on, paste the Mealie API token, and set (or generate) a connector password. Save the password somewhere safe.
 5. In Claude on the web, go to **Settings → Connectors → Add custom connector** and enter `https://<your domain>/mcp`. Claude opens an approval page on your box: enter the connector password and click **Allow access**. The connector then also works in the Claude mobile apps.
 
+When an assistant creates or imports a recipe through the connector, the connector runs Mealie's ingredient parser on it (using your AI provider if one is set up) so each ingredient is linked to a food. Assistants can also set a food's store section, such as Produce or Dairy, so shopping lists come out sorted by aisle. Sorting works best if Mealie has a starter set of foods and store sections, which Mealie can seed for you from its data management settings.
+
 Only someone who knows the connector password can connect an assistant. Five wrong passwords lock the approval page for 15 minutes. To cut off every connected assistant, change the connector password and also revoke the Mealie API token if you think it leaked.
 
 ## Actions

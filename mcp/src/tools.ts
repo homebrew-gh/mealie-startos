@@ -1,6 +1,51 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import * as z from 'zod/v4'
 import { mealie } from './mealie.js'
+import {
+  findOrCreateFood,
+  findOrCreateLabel,
+  listLabels,
+  parseLines,
+  parseRecipe,
+} from './ingredients.js'
+
+const parserArg = z
+  .enum(['openai', 'nlp', 'brute'])
+  .optional()
+  .describe(
+    "Mealie's ingredient parser. 'openai' (default) uses the AI provider set in Mealie and falls back to 'nlp' if none is set up.",
+  )
+
+const parseArg = z
+  .boolean()
+  .optional()
+  .describe(
+    "Run Mealie's ingredient parser so each ingredient is linked to a food and unit (default true). Linked foods are what lets shopping lists sort by store section.",
+  )
+
+/** Parse a just-saved recipe's ingredients; never fail the save over it. */
+async function parseAfterSave(slug: string, parse: boolean | undefined) {
+  if (parse === false)
+    return { recipe: await mealie('GET', `/recipes/${slug}`) }
+  try {
+    const r = await parseRecipe(slug)
+    return {
+      recipe: r.recipe,
+      parsing: {
+        parser: r.parser,
+        parsed: r.parsed,
+        createdFoods: r.createdFoods,
+        createdUnits: r.createdUnits,
+        lowConfidence: r.lowConfidence,
+      },
+    }
+  } catch (err) {
+    return {
+      recipe: await mealie('GET', `/recipes/${slug}`),
+      parsing: { error: String((err as Error).message ?? err) },
+    }
+  }
+}
 
 const json = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
@@ -41,6 +86,10 @@ function recipeDetail(r: any) {
     ingredients: (r.recipeIngredient ?? []).map(
       (i: any) => i.display || i.originalText || i.note || '',
     ),
+    unlinkedIngredients:
+      (r.recipeIngredient ?? []).filter(
+        (i: any) => !i.food?.id && (i.originalText || i.note),
+      ).length || undefined,
     instructions: (r.recipeInstructions ?? []).map((s: any) =>
       s.title ? `${s.title}: ${s.text}` : s.text,
     ),
@@ -58,7 +107,8 @@ function itemSummary(i: any) {
     item: i.display || i.note || i.food?.name || '',
     quantity: i.quantity,
     checked: i.checked,
-    label: i.label?.name ?? undefined,
+    storeSection: i.label?.name ?? undefined,
+    food: i.food?.name ?? undefined,
   }
 }
 
@@ -143,16 +193,15 @@ export function registerTools(server: McpServer) {
           .boolean()
           .optional()
           .describe("Also import the page's tags/keywords"),
+        parseIngredients: parseArg,
       },
     },
-    async ({ url, includeTags }) => {
+    async ({ url, includeTags, parseIngredients }) => {
       const slug = await mealie<string>('POST', '/recipes/create/url', {
         body: { url, includeTags: includeTags ?? false },
       })
-      return json({
-        slug,
-        recipe: recipeDetail(await mealie('GET', `/recipes/${slug}`)),
-      })
+      const { recipe, parsing } = await parseAfterSave(slug, parseIngredients)
+      return json({ slug, parsing, recipe: recipeDetail(recipe) })
     },
   )
 
@@ -181,6 +230,7 @@ export function registerTools(server: McpServer) {
         totalTime: z.string().optional().describe('ISO 8601 duration'),
         keywords: z.array(z.string()).optional().describe('Imported as tags'),
         sourceUrl: z.url().optional(),
+        parseIngredients: parseArg,
       },
     },
     async (a) => {
@@ -211,10 +261,8 @@ export function registerTools(server: McpServer) {
           },
         },
       )
-      return json({
-        slug,
-        recipe: recipeDetail(await mealie('GET', `/recipes/${slug}`)),
-      })
+      const { recipe, parsing } = await parseAfterSave(slug, a.parseIngredients)
+      return json({ slug, parsing, recipe: recipeDetail(recipe) })
     },
   )
 
@@ -244,6 +292,7 @@ export function registerTools(server: McpServer) {
           .array(z.object({ title: z.string().optional(), text: z.string() }))
           .optional()
           .describe('Replaces all notes'),
+        parseIngredients: parseArg,
       },
     },
     async ({
@@ -254,6 +303,7 @@ export function registerTools(server: McpServer) {
       ingredients,
       instructions,
       notes,
+      parseIngredients,
     }) => {
       const patch: Record<string, unknown> = {}
       if (name !== undefined) patch.name = name
@@ -262,6 +312,7 @@ export function registerTools(server: McpServer) {
       if (ingredients)
         patch.recipeIngredient = ingredients.map((note) => ({
           note,
+          originalText: note,
           display: note,
         }))
       if (instructions)
@@ -271,7 +322,121 @@ export function registerTools(server: McpServer) {
       const r = await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
         body: patch,
       })
-      return json(recipeDetail(r))
+      if (!ingredients) return json(recipeDetail(r))
+      const { recipe, parsing } = await parseAfterSave(r.slug, parseIngredients)
+      return json({ parsing, recipe: recipeDetail(recipe) })
+    },
+  )
+
+  server.registerTool(
+    'parse_recipe_ingredients',
+    {
+      title: "Parse a recipe's ingredients",
+      description:
+        "Run Mealie's ingredient parser on a saved recipe: split each ingredient into quantity, unit and food, link it to Mealie's foods and units (creating missing ones), and save. Use it on recipes whose ingredients are plain text, so they shop and sort properly.",
+      inputSchema: {
+        slug: z.string(),
+        parser: parserArg,
+        reparseAll: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also re-parse ingredients already linked to a food (default false)',
+          ),
+      },
+    },
+    async ({ slug, parser, reparseAll }) => {
+      const r = await parseRecipe(slug, { parser, onlyUnlinked: !reparseAll })
+      return json({
+        parser: r.parser,
+        parsed: r.parsed,
+        createdFoods: r.createdFoods,
+        createdUnits: r.createdUnits,
+        lowConfidence: r.lowConfidence,
+        ingredients: (r.recipe.recipeIngredient ?? []).map((i: any) => ({
+          text: i.display || i.originalText || i.note,
+          quantity: i.quantity,
+          unit: i.unit?.name,
+          food: i.food?.name,
+          storeSection: i.food?.label?.name,
+          note: i.note || undefined,
+        })),
+      })
+    },
+  )
+
+  server.registerTool(
+    'parse_ingredients',
+    {
+      title: 'Parse ingredient lines',
+      description:
+        'Preview how Mealie parses ingredient lines into quantity, unit and food. Saves nothing.',
+      inputSchema: {
+        lines: z.array(z.string()).min(1),
+        parser: parserArg,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ lines, parser }) => {
+      const r = await parseLines(lines, parser)
+      return json({
+        parser: r.parser,
+        lines: r.lines.map((l) => ({
+          input: l.input,
+          quantity: l.quantity,
+          unit: l.unit?.name,
+          food: l.food?.name,
+          foodExists: Boolean(l.food?.id),
+          note: l.note || undefined,
+          confidence: l.confidence,
+        })),
+      })
+    },
+  )
+
+  // ---------------- Store sections ----------------
+  server.registerTool(
+    'list_store_sections',
+    {
+      title: 'List store sections',
+      description:
+        "List the store sections (Mealie 'labels', e.g. Produce, Dairy) that shopping lists are grouped by.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () =>
+      json((await listLabels()).map((l: any) => ({ id: l.id, name: l.name }))),
+  )
+
+  server.registerTool(
+    'set_food_store_section',
+    {
+      title: "Set a food's store section",
+      description:
+        'Set which store section (aisle) a food belongs to, e.g. "chicken thighs" -> "Meat". The section is created if it does not exist, and so is the food. Every future shopping list item linked to this food is sorted into that section.',
+      inputSchema: {
+        foods: z
+          .array(z.string())
+          .min(1)
+          .describe('Food names (or ids) to put in this section'),
+        section: z.string().describe('Store section name, e.g. "Produce"'),
+      },
+    },
+    async ({ foods, section }) => {
+      const { label, created } = await findOrCreateLabel(section)
+      const results = []
+      for (const f of foods) {
+        const food = await findOrCreateFood(f)
+        await mealie('PUT', `/foods/${food.id}`, {
+          body: { ...food, labelId: label.id },
+        })
+        results.push(food.name)
+      }
+      return json({
+        section: label.name,
+        sectionCreated: created,
+        foods: results,
+      })
     },
   )
 
@@ -379,7 +544,8 @@ export function registerTools(server: McpServer) {
     'get_shopping_list',
     {
       title: 'Get shopping list',
-      description: 'Get the items on one shopping list.',
+      description:
+        'Get the items on one shopping list, sorted by store section. Items without a section come last.',
       inputSchema: {
         listId: z.string(),
         includeChecked: z
@@ -397,6 +563,12 @@ export function registerTools(server: McpServer) {
       const items = (l.listItems ?? [])
         .filter((i: any) => includeChecked || !i.checked)
         .map(itemSummary)
+        .sort(
+          (a: any, b: any) =>
+            (a.storeSection ?? '\uffff').localeCompare(
+              b.storeSection ?? '\uffff',
+            ) || a.item.localeCompare(b.item),
+        )
       return json({ id: l.id, name: l.name, items })
     },
   )
@@ -504,6 +676,34 @@ export function registerTools(server: McpServer) {
         },
       )
       return json({ id: itemId, checked })
+    },
+  )
+
+  server.registerTool(
+    'set_shopping_item_store_section',
+    {
+      title: "Set a shopping item's store section",
+      description:
+        'Move one shopping list item into a store section. To make it stick for future lists, also use set_food_store_section on its food.',
+      inputSchema: {
+        itemId: z.string(),
+        section: z.string().describe('Store section name, e.g. "Bakery"'),
+      },
+    },
+    async ({ itemId, section }) => {
+      const { label } = await findOrCreateLabel(section)
+      const item = await mealie(
+        'GET',
+        `/households/shopping/items/${encodeURIComponent(itemId)}`,
+      )
+      await mealie(
+        'PUT',
+        `/households/shopping/items/${encodeURIComponent(itemId)}`,
+        {
+          body: { ...item, labelId: label.id },
+        },
+      )
+      return json({ id: itemId, section: label.name, food: item.food?.name })
     },
   )
 
