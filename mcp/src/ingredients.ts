@@ -208,11 +208,22 @@ export async function findOrCreateLabel(name: string) {
   return { label, created: true }
 }
 
-/** Finds a food by name or id, or creates it. */
+/** Finds a food by name or id, or creates it, and says which it did. */
 export async function findOrCreateFood(nameOrId: string) {
   if (/^[0-9a-f-]{36}$/i.test(nameOrId)) {
-    return mealie('GET', `/foods/${nameOrId}`)
+    return { food: await mealie('GET', `/foods/${nameOrId}`), created: false }
   }
-  const food = await new Resolver('foods').resolve({ name: nameOrId })
-  return mealie('GET', `/foods/${food!.id}`)
+  const resolver = new Resolver('foods')
+  const food = await resolver.resolve({ name: nameOrId })
+  return {
+    food: await mealie('GET', `/foods/${food!.id}`),
+    created: resolver.created.length > 0,
+  }
+}
+
+/** A food's store section name, from its label or the label list. */
+export function sectionName(food: any, labels: Named[]): string | undefined {
+  if (food?.label?.name) return food.label.name
+  if (!food?.labelId) return undefined
+  return labels.find((l) => l.id === food.labelId)?.name
 }

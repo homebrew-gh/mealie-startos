@@ -72,7 +72,7 @@ Cloud assistants such as Claude call the connector from their own servers, not f
 
 ### Ingredients and store sections
 
-When an assistant creates or imports a recipe through the connector, the connector runs Mealie's ingredient parser on it, using your AI provider if one is set up and Mealie's built-in parser otherwise, so each ingredient is linked to a food. A line that lists several foods, such as "salt and pepper, to taste", is split into one ingredient per food first. Assistants can also set a food's store section, such as Produce or Dairy, so shopping lists come out sorted by aisle.
+When an assistant creates or imports a recipe through the connector, the connector runs Mealie's ingredient parser on it, using your AI provider if one is set up and Mealie's built-in parser otherwise, so each ingredient is linked to a food. A line that lists several foods, such as "salt and pepper, to taste", is split into one ingredient per food first. Assistants can also set a food's store section, such as Produce or Dairy, so shopping lists come out sorted by aisle. They can read back which food each ingredient is linked to and each food's section, and list your foods to find duplicates such as "onion" and "onions".
 
 This works best if Mealie has a starter set of foods, units and store sections (Mealie calls them labels). In Mealie's **Data Management** pages for foods, units and labels, use **Seed** to load Mealie's defaults.
 
@@ -83,6 +83,10 @@ Assistants can file recipes into categories and tags and record when you cooked 
 ### Mains and sides
 
 Assistants are asked to save a main and each side as separate recipes, and to plan them on the same day under the same meal (for example both under dinner), so the YesChef app can cook the whole meal on one timeline. They also set each recipe's prep and cook times, which that timeline is built from. If older recipes have a side merged into the main, you can ask an assistant to split them: it creates the side as its own recipe, trims the main, updates the meal plan and deletes any leftover combined recipe.
+
+### Recipe photos
+
+Assistants can set or replace a recipe's photo, from a link to an image or by uploading the image itself.
 
 ### Nutrition
 
