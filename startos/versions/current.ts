@@ -1,10 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '3.31.0:10',
+  version: '3.31.0:11',
   releaseNotes: {
     en_US:
-      'AI connector: get_recipe shows the food each ingredient is linked to and its store section; new list_foods tool lists foods with their store sections (with optional search) to find duplicates; set_food_store_section reports whether each food matched an existing one or was created. New set_recipe_image tool sets the photo of a recipe from an image URL or an uploaded image.',
+      'AI connector: new list_cook_notes tool lists the notes taken while cooking (the cooking notes the YesChef app saves from cook mode, and "I made this" comments) for a day or date range, so an assistant can review how a cook went and suggest recipe fixes for next time. The connector now uses the time zone from the Set Time Zone action.',
   },
   migrations: {
     up: async ({ effects }) => {},

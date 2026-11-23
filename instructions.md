@@ -84,6 +84,10 @@ Assistants can file recipes into categories and tags and record when you cooked 
 
 Assistants are asked to save a main and each side as separate recipes, and to plan them on the same day under the same meal (for example both under dinner), so the YesChef app can cook the whole meal on one timeline. They also set each recipe's prep and cook times, which that timeline is built from. If older recipes have a side merged into the main, you can ask an assistant to split them: it creates the side as its own recipe, trims the main, updates the meal plan and deletes any leftover combined recipe.
 
+### Cooking notes
+
+Assistants can read the notes you take while cooking: the cooking notes the [YesChef](https://github.com/homebrew-gh/yeschef) app saves from cook mode (spoken with its mic button, each tagged with the time and step), and comments left with Mealie's **I made this**. Ask something like "review today's cooking notes and suggest fixes for next time". The assistant points out what was hard and proposes changes to the recipe, and only saves the ones you agree to. The notes themselves stay on the recipe's timeline in Mealie.
+
 ### Recipe photos
 
 Assistants can set or replace a recipe's photo, from a link to an image or by uploading the image itself.
