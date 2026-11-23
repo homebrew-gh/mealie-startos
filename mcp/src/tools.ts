@@ -7,6 +7,7 @@ import {
   listLabels,
   parseLines,
   parseRecipe,
+  sectionName,
 } from './ingredients.js'
 import { splitLines } from './split.js'
 import {
@@ -346,7 +347,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Get recipe',
       description:
-        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Fields that are not set are left out, so use this to confirm what was saved.',
+        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Each ingredient comes with the food it is saved as linked to (id and name) and the store section of that food; an ingredient without a food is not linked. Fields that are not set are left out, so use this to confirm what was saved.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id) from search_recipes'),
       },
@@ -354,7 +355,16 @@ export function registerTools(server: McpServer) {
     },
     async ({ slug }) => {
       const r = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
-      return json({ ...recipeDetail(r), lastMade: await lastMade(r.slug) })
+      const labels = await listLabels()
+      return json({
+        ...recipeDetail(r),
+        ingredients: (r.recipeIngredient ?? []).map((i: any) => ({
+          text: i.display || i.originalText || i.note || '',
+          food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
+          storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
+        })),
+        lastMade: await lastMade(r.slug),
+      })
     },
   )
 
@@ -748,7 +758,7 @@ export function registerTools(server: McpServer) {
     {
       title: "Set a food's store section",
       description:
-        'Set which store section (aisle) a food belongs to, e.g. "chicken thighs" -> "Meat". The section is created if it does not exist, and so is the food. Every future shopping list item linked to this food is sorted into that section.',
+        'Set which store section (aisle) a food belongs to, e.g. "chicken thighs" -> "Meat". The section is created if it does not exist, and so is the food. Every future shopping list item linked to this food is sorted into that section. For each food it reports whether it matched an existing food or created a new one (check created ones for accidental duplicates with list_foods) and its previous section.',
       inputSchema: {
         foods: z
           .array(z.string())
@@ -759,18 +769,75 @@ export function registerTools(server: McpServer) {
     },
     async ({ foods, section }) => {
       const { label, created } = await findOrCreateLabel(section)
+      const labels = await listLabels()
       const results = []
       for (const f of foods) {
-        const food = await findOrCreateFood(f)
+        const { food, created: foodCreated } = await findOrCreateFood(f)
+        const previousSection = sectionName(food, labels)
         await mealie('PUT', `/foods/${food.id}`, {
           body: { ...food, labelId: label.id },
         })
-        results.push(food.name)
+        results.push({
+          requested: f,
+          id: food.id,
+          name: food.name,
+          result: foodCreated ? 'created' : 'matched',
+          previousSection,
+        })
       }
       return json({
         section: label.name,
         sectionCreated: created,
         foods: results,
+      })
+    },
+  )
+
+  server.registerTool(
+    'list_foods',
+    {
+      title: 'List foods',
+      description:
+        "List Mealie's foods (the things ingredients and shopping items link to) with each one's id and store section. Use search to find a food or near-duplicates (e.g. \"onion\" and \"onions\"); without search it pages through every food.",
+      inputSchema: {
+        search: z
+          .string()
+          .optional()
+          .describe('Text to match in food names'),
+        page: z.number().int().min(1).optional().describe('Page, from 1'),
+        perPage: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe('Foods per page (default 100)'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ search, page, perPage }) => {
+      const [r, labels] = await Promise.all([
+        mealie('GET', '/foods', {
+          query: {
+            search,
+            page: page ?? 1,
+            perPage: perPage ?? 100,
+            orderBy: 'name',
+            orderDirection: 'asc',
+          },
+        }),
+        listLabels(),
+      ])
+      return json({
+        page: r.page ?? page ?? 1,
+        totalPages: r.total_pages ?? undefined,
+        total: r.total ?? undefined,
+        foods: (r.items ?? []).map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          pluralName: f.pluralName || undefined,
+          storeSection: sectionName(f, labels),
+        })),
       })
     },
   )
