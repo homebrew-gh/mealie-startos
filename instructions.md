@@ -84,6 +84,10 @@ Assistants can file recipes into categories and tags and record when you cooked 
 
 Assistants are asked to save a main and each side as separate recipes, and to plan them on the same day under the same meal (for example both under dinner), so the YesChef app can cook the whole meal on one timeline. They also set each recipe's prep and cook times, which that timeline is built from. If older recipes have a side merged into the main, you can ask an assistant to split them: it creates the side as its own recipe, trims the main, updates the meal plan and deletes any leftover combined recipe.
 
+### Recipe photos
+
+Assistants can set or replace a recipe's photo, from a link to an image or by uploading the image itself.
+
 ### Nutrition
 
 Assistants can add nutrition facts per serving to a recipe (calories, protein, carbs, fat, fiber, sugar, sodium and more), for example "add macros to this week's recipes". If the recipe has no label they estimate from the ingredients and say so. Adding nutrition also turns on the nutrition panel for that recipe in Mealie.

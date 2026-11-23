@@ -6,7 +6,7 @@ export class MealieError extends Error {}
 export async function mealie<T = any>(
   method: string,
   path: string,
-  opts: { query?: Record<string, unknown>; body?: unknown } = {},
+  opts: { query?: Record<string, unknown>; body?: unknown; form?: FormData } = {},
 ): Promise<T> {
   const url = new URL(config.mealieUrl + '/api' + path)
   for (const [k, v] of Object.entries(opts.query ?? {})) {
@@ -24,7 +24,7 @@ export async function mealie<T = any>(
         ? { 'Content-Type': 'application/json' }
         : {}),
     },
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
     signal: AbortSignal.timeout(120_000),
   })
   const text = await res.text()

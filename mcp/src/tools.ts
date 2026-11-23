@@ -278,6 +278,7 @@ function recipeDetail(r: any) {
     ),
     tools: names(r.tools),
     source: r.orgURL || undefined,
+    hasImage: Boolean(r.image),
   }
 }
 
@@ -570,6 +571,51 @@ export function registerTools(server: McpServer) {
         parseIngredients,
       )
       return json({ createdOrganizers, parsing, recipe: recipeDetail(recipe) })
+    },
+  )
+
+  server.registerTool(
+    'set_recipe_image',
+    {
+      title: 'Set recipe image',
+      description:
+        "Set or replace a recipe's photo. Give imageUrl (a direct link to a JPEG, PNG or WebP image, or a page Mealie can find the image on) and Mealie downloads it, or give imageBase64 with its format to upload the image itself. get_recipe's hasImage shows whether a recipe has one.",
+      inputSchema: {
+        slug: z.string().describe('Recipe slug from search_recipes'),
+        imageUrl: z.url().optional().describe('Public URL of the image'),
+        imageBase64: z
+          .string()
+          .optional()
+          .describe('The image file itself, base64-encoded (no data: prefix needed)'),
+        format: z
+          .enum(['jpg', 'jpeg', 'png', 'webp'])
+          .optional()
+          .describe('Format of imageBase64 (default jpg)'),
+      },
+    },
+    async ({ slug, imageUrl, imageBase64, format }) => {
+      if (!imageUrl === !imageBase64) {
+        throw new Error('Give exactly one of imageUrl or imageBase64.')
+      }
+      const path = `/recipes/${encodeURIComponent(slug)}/image`
+      if (imageUrl) {
+        await mealie('POST', path, { body: { url: imageUrl } })
+      } else {
+        const data = imageBase64!.replace(/^data:[^;]+;base64,/, '')
+        const bytes = Buffer.from(data, 'base64')
+        if (!bytes.length) throw new Error('imageBase64 is empty or not base64.')
+        const ext = format ?? 'jpg'
+        const form = new FormData()
+        form.append(
+          'image',
+          new Blob([bytes], { type: `image/${ext === 'jpg' ? 'jpeg' : ext}` }),
+          `image.${ext}`,
+        )
+        form.append('extension', ext)
+        await mealie('PUT', path, { form })
+      }
+      const r = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
+      return json({ slug: r.slug, name: r.name, hasImage: Boolean(r.image) })
     },
   )
 
