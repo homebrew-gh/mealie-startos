@@ -113,6 +113,37 @@ const tagsArg = z
       ORGANIZING_SCHEME,
   )
 
+const SECTION_HELP =
+  'An entry can also be a subheading with its ingredients, {"section": "Marinade", "ingredients": ["1/4 cup lime juice", ...]}, to group the lines that go into one part of the dish. Mix plain lines and sections in order; lines before the first section have no subheading.'
+
+const ingredientEntry = z.union([
+  z.string(),
+  z.object({
+    section: z.string().describe('Subheading, e.g. "Marinade" or "For the sauce"'),
+    ingredients: z.array(z.string()),
+  }),
+])
+
+type IngredientEntry = z.infer<typeof ingredientEntry>
+
+/** Ingredient lines in order, with the subheading (Mealie's `title`) each one starts. */
+function flattenIngredients(entries: IngredientEntry[]) {
+  const lines: string[] = []
+  const titles: (string | undefined)[] = []
+  for (const e of entries) {
+    if (typeof e === 'string') {
+      lines.push(e)
+      titles.push(undefined)
+      continue
+    }
+    e.ingredients.forEach((line, k) => {
+      lines.push(line)
+      titles.push(k === 0 ? e.section.trim() || undefined : undefined)
+    })
+  }
+  return { lines, titles }
+}
+
 /** The time fields of a PATCH body, from ISO 8601 durations. */
 function timePatch(t: {
   prepTime?: string
@@ -323,6 +354,7 @@ async function recipeWithLinks(r: any) {
   return {
     ...recipeDetail(r),
     ingredients: (r.recipeIngredient ?? []).map((i: any) => ({
+      section: i.title || undefined,
       text: i.display || i.originalText || i.note || '',
       food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
       storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
@@ -403,7 +435,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Get recipe',
       description:
-        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Each ingredient comes with the food it is saved as linked to (id and name) and the store section of that food; an ingredient without a food is not linked. Fields that are not set are left out, so use this to confirm what was saved.',
+        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Each ingredient comes with the food it is saved as linked to (id and name) and the store section of that food, plus the subheading (section) it starts, if any; an ingredient without a food is not linked. Fields that are not set are left out, so use this to confirm what was saved.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id) from search_recipes'),
       },
@@ -455,9 +487,10 @@ export function registerTools(server: McpServer) {
         name: z.string(),
         description: z.string().optional(),
         ingredients: z
-          .array(z.string())
+          .array(ingredientEntry)
           .describe(
-            'One ingredient per entry, e.g. "2 cups flour". Put each food on its own entry: "salt, to taste" and "pepper, to taste", not "salt and pepper" (combined lines are split automatically when possible).',
+            'One ingredient per entry, e.g. "2 cups flour". Put each food on its own entry: "salt, to taste" and "pepper, to taste", not "salt and pepper" (combined lines are split automatically when possible). ' +
+              SECTION_HELP,
           ),
         instructions: z.array(z.string()).describe('One step per entry'),
         servings: z.string().optional().describe('e.g. "4 servings"'),
@@ -495,12 +528,13 @@ export function registerTools(server: McpServer) {
           )
         }
       }
+      const { lines, titles } = flattenIngredients(a.ingredients)
       const schemaOrg = {
         '@context': 'https://schema.org',
         '@type': 'Recipe',
         name: a.name,
         description: a.description,
-        recipeIngredient: a.ingredients,
+        recipeIngredient: lines,
         recipeInstructions: a.instructions.map((text) => ({
           '@type': 'HowToStep',
           text,
@@ -533,7 +567,7 @@ export function registerTools(server: McpServer) {
         }
       }
       // Mealie's JSON import doesn't keep the times, so set them directly.
-      await step('Saving times, nutrition and notes', async () => {
+      await step('Saving times, nutrition, notes and ingredient subheadings', async () => {
         const extra: Record<string, unknown> = timePatch(a)
         if (a.nutrition) {
           const current = await mealie<any>(
@@ -541,6 +575,23 @@ export function registerTools(server: McpServer) {
             `/recipes/${encodeURIComponent(slug)}`,
           )
           Object.assign(extra, nutritionPatch(current, a.nutrition))
+        }
+        if (titles.some(Boolean)) {
+          // The JSON import has no subheadings; put them on the saved lines.
+          const current = await mealie<any>(
+            'GET',
+            `/recipes/${encodeURIComponent(slug)}`,
+          )
+          const saved: any[] = current.recipeIngredient ?? []
+          if (saved.length !== lines.length) {
+            throw new Error(
+              `Mealie saved ${saved.length} ingredients for ${lines.length} lines, so the subheadings were not set; set them with update_recipe`,
+            )
+          }
+          extra.recipeIngredient = saved.map((ing, i) => ({
+            ...ing,
+            title: titles[i] ?? '',
+          }))
         }
         if (a.notes?.length) {
           extra.notes = a.notes.map((n) => ({
@@ -594,10 +645,12 @@ export function registerTools(server: McpServer) {
         cookTime: durationArg('Cooking time'),
         totalTime: durationArg('Total time'),
         ingredients: z
-          .array(z.string())
+          .array(ingredientEntry)
           .optional()
           .describe(
-            'Replaces all ingredients; one per entry, and one food per entry ("salt, to taste" and "pepper, to taste", not "salt and pepper")',
+            'Replaces all ingredients; one per entry, and one food per entry ("salt, to taste" and "pepper, to taste", not "salt and pepper"). ' +
+              SECTION_HELP +
+              ' To add subheadings to a recipe, pass all its ingredients again grouped into sections.',
           ),
         instructions: z
           .array(z.string())
@@ -641,12 +694,15 @@ export function registerTools(server: McpServer) {
         )
         Object.assign(patch, nutritionPatch(current, nutrition))
       }
-      if (ingredients)
-        patch.recipeIngredient = ingredients.map((note) => ({
+      if (ingredients) {
+        const { lines, titles } = flattenIngredients(ingredients)
+        patch.recipeIngredient = lines.map((note, i) => ({
           note,
           originalText: note,
           display: note,
+          title: titles[i] ?? '',
         }))
+      }
       if (instructions)
         patch.recipeInstructions = instructions.map((text) => ({ text }))
       if (notes)
