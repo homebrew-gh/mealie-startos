@@ -95,6 +95,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
           MEALIE_API_TOKEN: mcp.mealieToken,
           CONNECTOR_PASSWORD: mcp.password,
           STATE_FILE: '/data/oauth-state.json',
+          // So "today" in list_cook_notes is the user's day.
+          TZ: env.TZ,
         },
       },
       ready: {

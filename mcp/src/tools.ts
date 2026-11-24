@@ -224,6 +224,17 @@ async function lastMade(slug: string): Promise<string | undefined> {
   }
 }
 
+/** YYYY-MM-DD of a moment in the box's time zone. */
+function localDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** A Mealie timestamp; ones without an offset are UTC. */
+function eventTime(ts: string): Date {
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(ts) ? ts : `${ts}Z`)
+}
+
 const json = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
 })
@@ -781,6 +792,92 @@ export function registerTools(server: McpServer) {
         name: recipe.name,
         madeOn: timestamp,
         lastMade: (await lastMade(recipe.slug)) ?? timestamp,
+      })
+    },
+  )
+
+  server.registerTool(
+    'list_cook_notes',
+    {
+      title: 'List cooking notes',
+      description:
+        'List notes taken while cooking, newest day first, grouped by recipe: the "Cook notes" the YesChef app saves from cook mode (one line per note with the time and the step it was taken at, e.g. "- 6:42 PM, step 3 (Sear the steak): needed 2 more minutes a side"), and comments left with Mealie\'s "I made this" or mark_cooked. ' +
+        'Use it when the user asks to review their cooking: read each recipe with get_recipe, say what went wrong or was hard and why, and suggest concrete fixes for next time (times, temperatures, amounts, step order, clearer wording). ' +
+        'Only save changes the user agrees to, with update_recipe; tips that are not a change to a step can go in the recipe notes. The cooking notes stay as a record either way.',
+      inputSchema: {
+        since: date
+          .optional()
+          .describe('First day, YYYY-MM-DD (default 7 days ago)'),
+        until: date.optional().describe('Last day, YYYY-MM-DD (default today)'),
+        slug: z
+          .string()
+          .optional()
+          .describe('Only this recipe (slug or id)'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ since, until, slug }) => {
+      const today = localDay(new Date())
+      const first = since ?? localDay(new Date(Date.now() - 6 * 86_400_000))
+      const last = until ?? today
+      // Day boundaries in the box's time zone (TZ is set for the connector).
+      const start = new Date(`${first}T00:00:00`)
+      const end = new Date(`${last}T00:00:00`)
+      end.setDate(end.getDate() + 1)
+      const only = slug
+        ? (await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)).id
+        : undefined
+
+      const found: any[] = []
+      // Newest first; stop at the first event before the range.
+      pages: for (let page = 1; page <= 20; page++) {
+        const r = await mealie('GET', '/recipes/timeline/events', {
+          query: {
+            page,
+            perPage: 100,
+            orderBy: 'timestamp',
+            orderDirection: 'desc',
+          },
+        })
+        for (const e of r.items ?? []) {
+          const at = eventTime(e.timestamp)
+          if (at < start) break pages
+          if (at >= end || e.eventType !== 'comment') continue
+          if (!String(e.eventMessage ?? '').trim()) continue
+          if (only && e.recipeId !== only) continue
+          found.push({ ...e, at })
+        }
+        if (page >= (r.totalPages ?? r.total_pages ?? 1)) break
+      }
+
+      const recipes = new Map<string, any>()
+      for (const id of new Set(found.map((e) => e.recipeId))) {
+        try {
+          const r = await mealie('GET', `/recipes/${encodeURIComponent(id)}`)
+          recipes.set(id, { slug: r.slug, name: r.name })
+        } catch {
+          recipes.set(id, { id, name: '(recipe deleted)' })
+        }
+      }
+      const groups = new Map<string, any>()
+      for (const e of found) {
+        const day = localDay(e.at)
+        const key = `${day} ${e.recipeId}`
+        if (!groups.has(key))
+          groups.set(key, { day, recipe: recipes.get(e.recipeId), notes: [] })
+        groups.get(key).notes.push({
+          at: e.at.toISOString(),
+          subject: e.subject,
+          text: String(e.eventMessage).trim(),
+        })
+      }
+      return json({
+        since: first,
+        until: last,
+        cooked: [...groups.values()].map((g) => ({
+          ...g,
+          notes: g.notes.reverse(),
+        })),
       })
     },
   )
