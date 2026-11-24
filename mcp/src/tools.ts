@@ -295,6 +295,19 @@ function recipeDetail(r: any) {
   }
 }
 
+/** A recipe's detail with each ingredient's linked food and store section. */
+async function recipeWithLinks(r: any) {
+  const labels = await listLabels()
+  return {
+    ...recipeDetail(r),
+    ingredients: (r.recipeIngredient ?? []).map((i: any) => ({
+      text: i.display || i.originalText || i.note || '',
+      food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
+      storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
+    })),
+  }
+}
+
 function itemSummary(i: any) {
   return {
     id: i.id,
@@ -369,14 +382,8 @@ export function registerTools(server: McpServer) {
     },
     async ({ slug }) => {
       const r = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
-      const labels = await listLabels()
       return json({
-        ...recipeDetail(r),
-        ingredients: (r.recipeIngredient ?? []).map((i: any) => ({
-          text: i.display || i.originalText || i.note || '',
-          food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
-          storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
-        })),
+        ...(await recipeWithLinks(r)),
         lastMade: await lastMade(r.slug),
       })
     },
@@ -532,7 +539,7 @@ export function registerTools(server: McpServer) {
           : undefined,
         createdOrganizers,
         parsing,
-        recipe: recipeDetail(recipe),
+        recipe: await recipeWithLinks(recipe),
       })
     },
   )
@@ -627,24 +634,28 @@ export function registerTools(server: McpServer) {
       const createdOrganizers = await setOrganizers(current, categories, tags)
       if (!ingredients) {
         const r = await mealie('GET', `/recipes/${encodeURIComponent(current)}`)
-        return json({ createdOrganizers, recipe: recipeDetail(r) })
+        return json({ createdOrganizers, recipe: await recipeWithLinks(r) })
       }
       const { recipe, parsing } = await parseAfterSave(
         current,
         parseIngredients,
       )
-      return json({ createdOrganizers, parsing, recipe: recipeDetail(recipe) })
+      return json({
+        createdOrganizers,
+        parsing,
+        recipe: await recipeWithLinks(recipe),
+      })
     },
   )
 
   server.registerTool(
     'set_recipe_image',
     {
-      title: 'Set recipe image',
+      title: 'Set recipe images',
       description:
-        "Set or replace a recipe's photo. Give imageUrl (a direct link to a JPEG, PNG or WebP image, or a page Mealie can find the image on) and Mealie downloads it, or give imageBase64 with its format to upload the image itself. get_recipe's hasImage shows whether a recipe has one.",
+        "Set or replace recipe photos. For one recipe give slug and imageUrl (a direct link to a JPEG, PNG or WebP image, or a page Mealie can find the image on; Mealie downloads it) or imageBase64 with its format. For several recipes give images, a list of {slug, imageUrl}, in one call. Mealie can be slow to download photos: anything not finished within about 40 seconds is reported as still_saving and keeps saving in the background, so check those later with get_recipe's hasImage instead of retrying.",
       inputSchema: {
-        slug: z.string().describe('Recipe slug from search_recipes'),
+        slug: z.string().optional().describe('Recipe slug from search_recipes'),
         imageUrl: z.url().optional().describe('Public URL of the image'),
         imageBase64: z
           .string()
@@ -654,31 +665,139 @@ export function registerTools(server: McpServer) {
           .enum(['jpg', 'jpeg', 'png', 'webp'])
           .optional()
           .describe('Format of imageBase64 (default jpg)'),
+        images: z
+          .array(z.object({ slug: z.string(), imageUrl: z.url() }))
+          .max(50)
+          .optional()
+          .describe('Several recipes at once, instead of slug and imageUrl'),
       },
     },
-    async ({ slug, imageUrl, imageBase64, format }) => {
-      if (!imageUrl === !imageBase64) {
-        throw new Error('Give exactly one of imageUrl or imageBase64.')
-      }
-      const path = `/recipes/${encodeURIComponent(slug)}/image`
-      if (imageUrl) {
-        await mealie('POST', path, { body: { url: imageUrl } })
+    async ({ slug, imageUrl, imageBase64, format, images }) => {
+      type Job = { slug: string; imageUrl?: string; imageBase64?: string }
+      let jobs: Job[]
+      if (images?.length) {
+        if (slug || imageUrl || imageBase64) {
+          throw new Error('Give either images or slug with one image, not both.')
+        }
+        jobs = images
       } else {
-        const data = imageBase64!.replace(/^data:[^;]+;base64,/, '')
-        const bytes = Buffer.from(data, 'base64')
-        if (!bytes.length) throw new Error('imageBase64 is empty or not base64.')
-        const ext = format ?? 'jpg'
-        const form = new FormData()
-        form.append(
-          'image',
-          new Blob([bytes], { type: `image/${ext === 'jpg' ? 'jpeg' : ext}` }),
-          `image.${ext}`,
-        )
-        form.append('extension', ext)
-        await mealie('PUT', path, { form })
+        if (!slug) throw new Error('Give slug, or images for several recipes.')
+        if (!imageUrl === !imageBase64) {
+          throw new Error('Give exactly one of imageUrl or imageBase64.')
+        }
+        jobs = [{ slug, imageUrl, imageBase64 }]
       }
-      const r = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
-      return json({ slug: r.slug, name: r.name, hasImage: Boolean(r.image) })
+      const save = async (j: Job) => {
+        const path = `/recipes/${encodeURIComponent(j.slug)}/image`
+        if (j.imageUrl) {
+          await mealie('POST', path, {
+            body: { url: j.imageUrl },
+            timeoutMs: 300_000,
+          })
+        } else {
+          const data = j.imageBase64!.replace(/^data:[^;]+;base64,/, '')
+          const bytes = Buffer.from(data, 'base64')
+          if (!bytes.length) throw new Error('imageBase64 is empty or not base64.')
+          const ext = format ?? 'jpg'
+          const form = new FormData()
+          form.append(
+            'image',
+            new Blob([bytes], { type: `image/${ext === 'jpg' ? 'jpeg' : ext}` }),
+            `image.${ext}`,
+          )
+          form.append('extension', ext)
+          await mealie('PUT', path, { form, timeoutMs: 300_000 })
+        }
+      }
+      // A few at a time, so a big batch doesn't swamp Mealie.
+      const status = new Map<string, { status: string; error?: string }>()
+      const queue = [...jobs]
+      const worker = async () => {
+        for (let j = queue.shift(); j; j = queue.shift()) {
+          status.set(j.slug, { status: 'saving' })
+          try {
+            await save(j)
+            status.set(j.slug, { status: 'saved' })
+          } catch (err) {
+            status.set(j.slug, {
+              status: 'failed',
+              error: String((err as Error).message ?? err),
+            })
+          }
+        }
+      }
+      const all = Promise.all(
+        Array.from({ length: Math.min(3, jobs.length) }, worker),
+      )
+      await Promise.race([all, new Promise((r) => setTimeout(r, 40_000))])
+      return json({
+        results: jobs.map((j) => {
+          const s = status.get(j.slug)
+          return {
+            slug: j.slug,
+            status:
+              !s || s.status === 'saving' ? 'still_saving' : s.status,
+            error: s?.error,
+          }
+        }),
+        note: jobs.some((j) => (status.get(j.slug)?.status ?? 'saving') === 'saving')
+          ? 'Images marked still_saving keep saving in the background; check them with get_recipe (hasImage) in a minute instead of sending them again.'
+          : undefined,
+      })
+    },
+  )
+
+  server.registerTool(
+    'merge_foods',
+    {
+      title: 'Merge duplicate foods',
+      description:
+        'Merge duplicate foods (for example "onion" and "onions") into one. Every recipe ingredient and shopping list item linked to a duplicate is moved to the food you keep, then the duplicates are deleted. If the kept food has no store section, it takes the first one a duplicate had. Find duplicates with list_foods. This cannot be undone.',
+      inputSchema: {
+        keepFoodId: z.string().describe('Id of the food to keep, from list_foods'),
+        duplicateFoodIds: z
+          .array(z.string())
+          .min(1)
+          .describe('Ids of the duplicate foods to merge into it and delete'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    async ({ keepFoodId, duplicateFoodIds }) => {
+      const keep = await mealie('GET', `/foods/${encodeURIComponent(keepFoodId)}`)
+      const labels = await listLabels()
+      let inheritLabel: string | undefined
+      const merged = []
+      for (const id of new Set(duplicateFoodIds)) {
+        if (id === keep.id) continue
+        try {
+          const dup = await mealie('GET', `/foods/${encodeURIComponent(id)}`)
+          await mealie('PUT', '/foods/merge', {
+            body: { fromFood: dup.id, toFood: keep.id },
+          })
+          if (!inheritLabel && dup.labelId) inheritLabel = dup.labelId
+          merged.push({ id: dup.id, name: dup.name, result: 'merged' })
+        } catch (err) {
+          merged.push({
+            id,
+            result: 'failed',
+            error: String((err as Error).message ?? err),
+          })
+        }
+      }
+      let food = await mealie('GET', `/foods/${encodeURIComponent(keep.id)}`)
+      if (!food.labelId && inheritLabel) {
+        food = await mealie('PUT', `/foods/${encodeURIComponent(keep.id)}`, {
+          body: { ...food, labelId: inheritLabel },
+        })
+      }
+      return json({
+        kept: {
+          id: food.id,
+          name: food.name,
+          storeSection: sectionName(food, labels),
+        },
+        duplicates: merged,
+      })
     },
   )
 
