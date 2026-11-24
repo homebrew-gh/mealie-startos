@@ -43,3 +43,20 @@ export async function mealie<T = any>(
   }
   return (text ? JSON.parse(text) : null) as T
 }
+
+/**
+ * Creates something by name, or, if that fails because a parallel save just
+ * created the same thing, finds and returns that one instead.
+ */
+export async function createOrReuse<T>(
+  create: () => Promise<T>,
+  find: () => Promise<T | undefined>,
+): Promise<{ value: T; created: boolean }> {
+  try {
+    return { value: await create(), created: true }
+  } catch (err) {
+    const existing = await find().catch(() => undefined)
+    if (existing) return { value: existing, created: false }
+    throw err
+  }
+}

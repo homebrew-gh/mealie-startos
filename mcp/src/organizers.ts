@@ -2,7 +2,7 @@
  * Recipe categories and tags (Mealie "organizers"), looked up by name and
  * created when missing, in the {id, name, slug} shape a recipe stores.
  */
-import { mealie } from './mealie.js'
+import { createOrReuse, mealie } from './mealie.js'
 
 export type OrganizerKind = 'categories' | 'tags'
 export type Organizer = { id: string; name: string; slug: string }
@@ -43,8 +43,15 @@ export async function resolveOrganizers(kind: OrganizerKind, names: string[]) {
   for (const [key, name] of wanted) {
     let hit = existing.find((o) => norm(o.name) === key || norm(o.slug) === key)
     if (!hit) {
-      hit = await mealie('POST', `/organizers/${kind}`, { body: { name } })
-      created.push(name)
+      const r = await createOrReuse<Organizer>(
+        () => mealie('POST', `/organizers/${kind}`, { body: { name } }),
+        async () =>
+          (await listOrganizers(kind)).find(
+            (o) => norm(o.name) === key || norm(o.slug) === key,
+          ),
+      )
+      hit = r.value
+      if (r.created) created.push(name)
     }
     organizers.push({ id: hit!.id, name: hit!.name, slug: hit!.slug })
   }

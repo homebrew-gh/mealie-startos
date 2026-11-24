@@ -5,6 +5,7 @@ import {
   findOrCreateFood,
   findOrCreateLabel,
   listLabels,
+  ownFoodText,
   parseLines,
   parseRecipe,
   sectionName,
@@ -44,6 +45,7 @@ async function parseAfterSave(slug: string, parse: boolean | undefined) {
         splitLines: r.splitLines,
         createdFoods: r.createdFoods,
         createdUnits: r.createdUnits,
+        rematchedFoods: r.rematchedFoods,
         lowConfidence: r.lowConfidence,
       },
     }
@@ -429,11 +431,34 @@ export function registerTools(server: McpServer) {
         categories: categoriesArg,
         tags: tagsArg,
         nutrition: nutritionArg,
+        notes: z
+          .array(z.object({ title: z.string().optional(), text: z.string() }))
+          .optional()
+          .describe('Recipe notes, e.g. that the nutrition is an estimate'),
+        allowDuplicateName: z
+          .boolean()
+          .optional()
+          .describe(
+            'Save even if a recipe with exactly this name exists (default false: the call fails and names the existing recipe, so a retry never makes a "(1)" copy)',
+          ),
         sourceUrl: z.url().optional(),
         parseIngredients: parseArg,
       },
     },
     async (a) => {
+      if (!a.allowDuplicateName) {
+        const found = await mealie('GET', '/recipes', {
+          query: { search: a.name, perPage: 20 },
+        })
+        const same = (found.items ?? []).find(
+          (r: any) => r.name?.trim().toLowerCase() === a.name.trim().toLowerCase(),
+        )
+        if (same) {
+          throw new Error(
+            `A recipe named "${same.name}" already exists (slug ${same.slug}). If an earlier create_recipe call saved it, finish it with update_recipe instead of creating it again; to save a second recipe with this name, pass allowDuplicateName: true.`,
+          )
+        }
+      }
       const schemaOrg = {
         '@context': 'https://schema.org',
         '@type': 'Recipe',
@@ -460,24 +485,51 @@ export function registerTools(server: McpServer) {
           },
         },
       )
+      // The recipe is saved now. Later steps report problems instead of
+      // failing the call, so a retry doesn't save a second copy.
+      const warnings: string[] = []
+      const step = async <T>(what: string, f: () => Promise<T>) => {
+        try {
+          return await f()
+        } catch (err) {
+          warnings.push(`${what}: ${(err as Error).message ?? err}`)
+          return undefined
+        }
+      }
       // Mealie's JSON import doesn't keep the times, so set them directly.
-      const extra: Record<string, unknown> = timePatch(a)
-      if (a.nutrition) {
-        const current = await mealie<any>(
-          'GET',
-          `/recipes/${encodeURIComponent(slug)}`,
-        )
-        Object.assign(extra, nutritionPatch(current, a.nutrition))
-      }
-      if (Object.keys(extra).length) {
-        await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
-          body: extra,
-        })
-      }
-      const createdOrganizers = await setOrganizers(slug, a.categories, a.tags)
+      await step('Saving times, nutrition and notes', async () => {
+        const extra: Record<string, unknown> = timePatch(a)
+        if (a.nutrition) {
+          const current = await mealie<any>(
+            'GET',
+            `/recipes/${encodeURIComponent(slug)}`,
+          )
+          Object.assign(extra, nutritionPatch(current, a.nutrition))
+        }
+        if (a.notes?.length) {
+          extra.notes = a.notes.map((n) => ({
+            title: n.title ?? '',
+            text: n.text,
+          }))
+        }
+        if (Object.keys(extra).length) {
+          await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
+            body: extra,
+          })
+        }
+      })
+      const createdOrganizers = await step('Setting categories and tags', () =>
+        setOrganizers(slug, a.categories, a.tags),
+      )
       const { recipe, parsing } = await parseAfterSave(slug, a.parseIngredients)
       return json({
         slug,
+        warnings: warnings.length
+          ? [
+              ...warnings,
+              'The recipe is saved; fix these with update_recipe rather than creating it again.',
+            ]
+          : undefined,
         createdOrganizers,
         parsing,
         recipe: recipeDetail(recipe),
@@ -705,7 +757,9 @@ export function registerTools(server: McpServer) {
       )
       return json({
         parser: r.parser,
-        lines: r.lines.map((l, k) => ({
+        lines: r.lines.map((l, k) => {
+          const own = l.food?.id ? ownFoodText(l, l.food) : undefined
+          return {
           input: lines[pieces[k].from],
           splitAs:
             pieces[k].text !== lines[pieces[k].from]
@@ -713,11 +767,13 @@ export function registerTools(server: McpServer) {
               : undefined,
           quantity: l.quantity,
           unit: l.unit?.name,
-          food: l.food?.name,
-          foodExists: Boolean(l.food?.id),
+          food: own ?? l.food?.name,
+          foodExists: own ? undefined : Boolean(l.food?.id),
+          parserMatchedInstead: own ? l.food?.name : undefined,
           note: l.note || undefined,
           confidence: l.confidence,
-        })),
+        }
+        }),
       })
     },
   )

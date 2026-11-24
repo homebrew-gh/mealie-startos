@@ -7,7 +7,7 @@
  * they have been run through the ingredient parser. Recipes created through
  * the API skip that step, so the connector runs it itself.
  */
-import { mealie } from './mealie.js'
+import { createOrReuse, mealie } from './mealie.js'
 import { splitLines } from './split.js'
 
 export type Parser = 'openai' | 'nlp' | 'brute'
@@ -67,26 +67,35 @@ class Resolver {
   created: string[] = []
   constructor(private kind: 'foods' | 'units') {}
 
+  /** An existing food or unit with exactly this name, plural or abbreviation. */
+  async findExact(name: string): Promise<Named | undefined> {
+    const key = norm(name)
+    const found = await mealie('GET', `/${this.kind}`, {
+      query: { search: name, perPage: 50 },
+    })
+    return (found.items ?? []).find(
+      (x: any) =>
+        norm(x.name) === key ||
+        (x.pluralName && norm(x.pluralName) === key) ||
+        (x.abbreviation && norm(x.abbreviation) === key),
+    )
+  }
+
   async resolve(item: Named | null | undefined): Promise<Named | null> {
     if (!item?.name?.trim()) return null
     if (item.id) return item
     const key = norm(item.name)
     const hit = this.cache.get(key)
     if (hit) return hit
-    const found = await mealie('GET', `/${this.kind}`, {
-      query: { search: item.name, perPage: 50 },
-    })
-    let match: Named | undefined = (found.items ?? []).find(
-      (x: any) =>
-        norm(x.name) === key ||
-        (x.pluralName && norm(x.pluralName) === key) ||
-        (x.abbreviation && norm(x.abbreviation) === key),
-    )
+    let match = await this.findExact(item.name)
     if (!match) {
-      match = await mealie('POST', `/${this.kind}`, {
-        body: { name: item.name.trim() },
-      })
-      this.created.push(item.name.trim())
+      const r = await createOrReuse<Named>(
+        () =>
+          mealie('POST', `/${this.kind}`, { body: { name: item.name.trim() } }),
+        () => this.findExact(item.name),
+      )
+      match = r.value
+      if (r.created) this.created.push(item.name.trim())
     }
     this.cache.set(key, match!)
     return match!
@@ -101,8 +110,21 @@ export async function toRecipeIngredients(parsed: ParsedLine[]) {
   const foods = new Resolver('foods')
   const units = new Resolver('units')
   const ingredients = []
+  const rematchedFoods: { input: string; parserFood: string; food: string }[] =
+    []
   for (const p of parsed) {
-    const food = await foods.resolve(p.food)
+    let food = await foods.resolve(p.food)
+    // The parser fuzzy-matches to existing foods, so "simple syrup" can come
+    // back as "maple syrup". If the matched food's name isn't in the line,
+    // use the line's own food words, matched exactly or created.
+    const own = food?.id ? ownFoodText(p, food) : undefined
+    if (own) {
+      const exact = await foods.resolve({ name: own })
+      if (exact && exact.id !== food!.id) {
+        rematchedFoods.push({ input: p.input, parserFood: food!.name, food: exact.name })
+        food = exact
+      }
+    }
     const unit = await units.resolve(p.unit)
     ingredients.push({
       quantity: p.quantity ?? 0,
@@ -117,7 +139,60 @@ export async function toRecipeIngredients(parsed: ParsedLine[]) {
     ingredients,
     createdFoods: foods.created,
     createdUnits: units.created,
+    rematchedFoods,
   }
+}
+
+/** Units to strip from a line even when the parser read the unit differently. */
+const COMMON_UNITS = [
+  'teaspoon', 'tablespoon', 'tsp', 'tbsp', 'tbs', 'cup', 'ounce', 'oz',
+  'fluid ounce', 'fl oz', 'pound', 'lb', 'gram', 'g', 'kilogram', 'kg',
+  'milliliter', 'millilitre', 'ml', 'liter', 'litre', 'l', 'pinch', 'dash',
+  'splash', 'clove', 'can', 'jar', 'bottle', 'package', 'pkg', 'slice',
+  'piece', 'bunch', 'sprig', 'stick', 'handful', 'part', 'shot', 'jigger',
+  'drop', 'quart', 'qt', 'pint', 'pt', 'gallon',
+]
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The food words of an ingredient line, when the parser linked it to a food
+ * whose name isn't in the line at all (a fuzzy match). Undefined when the
+ * match is fine or the words can't be picked out cleanly.
+ */
+export function ownFoodText(p: ParsedLine, food: Named): string | undefined {
+  const line = norm(p.input)
+  const names = [food.name, food.pluralName as string | undefined]
+    .filter((n): n is string => Boolean(n && n.trim()))
+    .map(norm)
+  if (names.some((n) => line.includes(n))) return undefined
+  let t = line.replace(/\([^)]*\)/g, ' ')
+  const note = p.note ? norm(p.note) : ''
+  if (note && t.includes(note)) t = t.replace(note, ' ')
+  t = t.split(',')[0]
+  t = t.replace(/^[\s\d./\-–¼½¾⅓⅔⅛⅜⅝⅞]+/, ' ').trim()
+  t = t.replace(/^(a|an)\s+/, '')
+  const unitNames = [
+    p.unit?.name,
+    p.unit?.pluralName,
+    p.unit?.abbreviation,
+    ...COMMON_UNITS,
+  ]
+    .filter((n): n is string => typeof n === 'string' && Boolean(n.trim()))
+    .map(norm)
+    .sort((a, b) => b.length - a.length)
+  for (const u of unitNames) {
+    const m = t.match(new RegExp(`^${escapeRe(u)}(s|es)?\\.?(\\s+|$)`))
+    if (m) {
+      t = t.slice(m[0].length)
+      break
+    }
+  }
+  t = t.replace(/^of\s+/, '').replace(/\s+/g, ' ').trim()
+  if (!t || t.split(' ').length > 5 || !/^[a-z][a-z' -]*$/.test(t)) {
+    return undefined
+  }
+  return t
 }
 
 /** The text to re-parse for an ingredient already stored on a recipe. */
@@ -183,6 +258,9 @@ export async function parseRecipe(
     splitLines: pieces.length - todo.length || undefined,
     createdFoods: linked.createdFoods,
     createdUnits: linked.createdUnits,
+    rematchedFoods: linked.rematchedFoods.length
+      ? linked.rematchedFoods
+      : undefined,
     lowConfidence: lines
       .filter((l) => l.confidence !== undefined && l.confidence < 0.6)
       .map((l) => l.input),
