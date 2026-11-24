@@ -295,6 +295,28 @@ function recipeDetail(r: any) {
   }
 }
 
+/** How many recipes and shopping list items are linked to a food. */
+async function foodUsage(foodId: string, items?: any[]) {
+  const [r, all] = await Promise.all([
+    mealie('GET', '/recipes', { query: { foods: [foodId], perPage: 50 } }),
+    items ?? shoppingItems(),
+  ])
+  const recipes = (r.items ?? []).map((x: any) => x.slug as string)
+  return {
+    recipeCount: (r.total as number | undefined) ?? recipes.length,
+    recipes,
+    shoppingItemCount: all.filter((i: any) => (i.foodId ?? i.food?.id) === foodId)
+      .length,
+  }
+}
+
+async function shoppingItems(): Promise<any[]> {
+  const r = await mealie('GET', '/households/shopping/items', {
+    query: { perPage: -1 },
+  })
+  return r.items ?? []
+}
+
 /** A recipe's detail with each ingredient's linked food and store section. */
 async function recipeWithLinks(r: any) {
   const labels = await listLabels()
@@ -337,6 +359,12 @@ export function registerTools(server: McpServer) {
           .array(z.string())
           .optional()
           .describe('Only recipes in these category slugs or ids'),
+        foods: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Only recipes with an ingredient linked to any of these food ids (from list_foods)',
+          ),
         page: z.number().int().min(1).optional(),
         perPage: z
           .number()
@@ -348,12 +376,13 @@ export function registerTools(server: McpServer) {
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ query, tags, categories, page, perPage }) => {
+    async ({ query, tags, categories, foods, page, perPage }) => {
       const r = await mealie('GET', '/recipes', {
         query: {
           search: query,
           tags,
           categories,
+          foods,
           page: page ?? 1,
           perPage: perPage ?? 20,
           orderBy: query ? undefined : 'name',
@@ -771,11 +800,19 @@ export function registerTools(server: McpServer) {
         if (id === keep.id) continue
         try {
           const dup = await mealie('GET', `/foods/${encodeURIComponent(id)}`)
+          const usage = await foodUsage(dup.id)
           await mealie('PUT', '/foods/merge', {
             body: { fromFood: dup.id, toFood: keep.id },
           })
           if (!inheritLabel && dup.labelId) inheritLabel = dup.labelId
-          merged.push({ id: dup.id, name: dup.name, result: 'merged' })
+          merged.push({
+            id: dup.id,
+            name: dup.name,
+            result: 'merged',
+            relinkedRecipes: usage.recipeCount,
+            recipes: usage.recipes.length ? usage.recipes : undefined,
+            relinkedShoppingItems: usage.shoppingItemCount,
+          })
         } catch (err) {
           merged.push({
             id,
@@ -797,7 +834,33 @@ export function registerTools(server: McpServer) {
           storeSection: sectionName(food, labels),
         },
         duplicates: merged,
+        ingredientTextRewritten: false,
+        note: "Merging only relinks: each ingredient's original text is kept as written, and its food is now the kept one.",
       })
+    },
+  )
+
+  server.registerTool(
+    'delete_food',
+    {
+      title: 'Delete food',
+      description:
+        'Delete a food (for example a junk name the parser made) that nothing uses any more. It refuses, and lists what still uses it, if any recipe ingredient or shopping list item is linked to it; relink those first, or use merge_foods to fold it into the right food. This cannot be undone.',
+      inputSchema: {
+        foodId: z.string().describe('Id of the food, from list_foods'),
+      },
+      annotations: { destructiveHint: true },
+    },
+    async ({ foodId }) => {
+      const food = await mealie('GET', `/foods/${encodeURIComponent(foodId)}`)
+      const usage = await foodUsage(food.id)
+      if (usage.recipeCount || usage.shoppingItemCount) {
+        throw new Error(
+          `"${food.name}" is still used by ${usage.recipeCount} recipe(s)${usage.recipes.length ? ` (${usage.recipes.join(', ')})` : ''} and ${usage.shoppingItemCount} shopping list item(s), so it was not deleted. Relink them, or use merge_foods to fold it into the right food.`,
+        )
+      }
+      await mealie('DELETE', `/foods/${encodeURIComponent(food.id)}`)
+      return json({ deleted: { id: food.id, name: food.name } })
     },
   )
 
@@ -1130,10 +1193,16 @@ export function registerTools(server: McpServer) {
           .max(500)
           .optional()
           .describe('Foods per page (default 100)'),
+        includeUsage: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also count the recipes and shopping list items linked to each food (slower; use with search or a small perPage)',
+          ),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ search, page, perPage }) => {
+    async ({ search, page, perPage, includeUsage }) => {
       const [r, labels] = await Promise.all([
         mealie('GET', '/foods', {
           query: {
@@ -1150,12 +1219,22 @@ export function registerTools(server: McpServer) {
         page: r.page ?? page ?? 1,
         totalPages: r.total_pages ?? undefined,
         total: r.total ?? undefined,
-        foods: (r.items ?? []).map((f: any) => ({
-          id: f.id,
-          name: f.name,
-          pluralName: f.pluralName || undefined,
-          storeSection: sectionName(f, labels),
-        })),
+        foods: await (async () => {
+          const items = includeUsage ? await shoppingItems() : undefined
+          const out = []
+          for (const f of r.items ?? []) {
+            const usage = includeUsage ? await foodUsage(f.id, items) : undefined
+            out.push({
+              id: f.id,
+              name: f.name,
+              pluralName: f.pluralName || undefined,
+              storeSection: sectionName(f, labels),
+              recipeCount: usage?.recipeCount,
+              shoppingItemCount: usage?.shoppingItemCount,
+            })
+          }
+          return out
+        })(),
       })
     },
   )
