@@ -1,10 +1,10 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '3.31.0:13',
+  version: '3.31.0:14',
   releaseNotes: {
     en_US:
-      'AI connector: new merge_foods tool merges duplicate foods into one and moves their recipes and shopping list items over; set_recipe_image takes a batch of images and reports slow downloads as still saving instead of timing out; create_recipe and update_recipe return each ingredient with its linked food and store section, like get_recipe.',
+      'AI connector: new delete_food tool deletes a food only when no recipe or shopping list item uses it; search_recipes can find recipes by food, and list_foods can show how many recipes and list items use each food; merge_foods reports how many recipes and list items it moved over.',
   },
   migrations: {
     up: async ({ effects }) => {},
