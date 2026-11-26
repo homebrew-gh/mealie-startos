@@ -137,9 +137,8 @@ const SECTION_HELP =
   'An entry can also be a subheading with its ingredients, {"section": "Marinade", "ingredients": ["1/4 cup lime juice", ...]}, to group the lines that go into one part of the dish. Mix plain lines and sections in order; lines before the first section have no subheading.'
 
 const INSTRUCTIONS_HELP =
-  'One step per entry: either a plain string or {"text": "...", "title"?: "Make the sauce", "summary"?: "Sear the steak", "ingredients"?: [0, 2]}. ' +
-  'Setting summary gives YesChef clean timer and cook-note labels. ' +
-  'Setting ingredients (0-based indexes into the flattened ingredients list — do not count section headers) wires Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact: ' +
+  'One step object per entry: {"text": "...", "title"?: "Make the sauce", "summary"?: "Sear the steak", "ingredients"?: [0, 2]}. ' +
+  'Include summary (short label for YesChef timers and cook notes) and ingredients (0-based indexes into the flattened ingredients list — do not count section headers) to wire Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact: ' +
   'include ONLY ingredients actually measured, prepped, or added in that step, and pass [] (or omit) for passive/finishing steps that introduce nothing new (preheating, simmering, flipping, baking, resting, slicing or serving already-cooked food) — do not re-list already-combined ingredients just because the step mentions the dish or sauce. ' +
   'Once at least one step has ingredientReferences, YesChef trusts them for the whole recipe and leaves [] steps clean. ' +
   'State step durations clearly in the text (e.g. "Simmer for 20 minutes") so timers and meal timelines pick them up.'
@@ -541,7 +540,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Create recipe',
       description:
-        'Save a new recipe you have written or transcribed. Mealie parses it like a schema.org Recipe. Returns the new slug. Give it a category and tags so it is filed in the cookbook. ' +
+        'Save a new recipe you have written or transcribed. Pass structured instruction objects ({text, title?, summary?, ingredients?}) so timers, cook notes, and YesChef\'s "You\'ll need" boxes are wired from the start. Returns the new slug. Give it a category and tags so it is filed in the cookbook. ' +
         ORGANIZING_SCHEME +
         ' ' +
         MEAL_GUIDANCE,
@@ -603,7 +602,7 @@ export function registerTools(server: McpServer) {
         recipeIngredient: lines,
         recipeInstructions: a.instructions.map((step) => ({
           '@type': 'HowToStep',
-          text: typeof step === 'string' ? step : step.text,
+          text: step.text,
         })),
         recipeYield: a.servings,
         prepTime: a.prepTime,
@@ -635,7 +634,9 @@ export function registerTools(server: McpServer) {
       // Mealie's JSON import doesn't keep the times, subheadings, or structured step fields, so set them directly.
       await step('Saving times, nutrition, notes, subheadings and structured steps', async () => {
         const extra: Record<string, unknown> = timePatch(a)
-        const hasStructuredSteps = a.instructions.some((s) => typeof s !== 'string')
+        const hasStructuredSteps = a.instructions.some(
+          (s) => Boolean(s.title?.trim() || s.summary?.trim() || s.ingredients?.length),
+        )
         const hasTitles = titles.some(Boolean)
         const servingsNum = parseServingsNumber(a.servings)
         const needsCurrent = Boolean(
@@ -727,7 +728,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Update recipe',
       description:
-        "Change fields of an existing recipe. Only the fields you pass are changed. Ingredients, instructions, notes, categories and tags, if given, replace the existing lists, so to add a tag pass the recipe's current tags plus the new one. To split a combined recipe into a main and a side, create the side with create_recipe, update this one to remove the side's ingredients and steps, and fix the meal plan. " +
+        "Change fields of an existing recipe. Only the fields you pass are changed. Ingredients, structured instructions ({text, title?, summary?, ingredients?}), notes, categories and tags, if given, replace the existing lists, so to add a tag pass the recipe's current tags plus the new one. To split a combined recipe into a main and a side, create the side with create_recipe, update this one to remove the side's ingredients and steps, and fix the meal plan. " +
         ORGANIZING_SCHEME +
         ' ' +
         MEAL_GUIDANCE,
