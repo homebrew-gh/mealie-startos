@@ -24,7 +24,7 @@ export const instructionEntry = z.union([
       .array(z.number().int().min(0))
       .optional()
       .describe(
-        "0-based indexes into the recipe's ingredients list for the ingredients used in this step. Sets Mealie's ingredientReferences so YesChef's \"You'll need\" box is exact.",
+        "0-based indexes into the flattened ingredients list for ONLY the ingredients actually measured, prepped, or added in this step (do not count section headers). Sets Mealie's ingredientReferences so YesChef's \"You'll need\" box is exact. Omit or pass [] for steps that don't introduce or prep anything new (preheating, simmering, flipping, baking, resting, slicing/serving already-cooked food).",
       ),
   }),
 ])
