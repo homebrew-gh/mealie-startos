@@ -8,7 +8,8 @@ import {
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js'
 import { approvalRouter, provider } from './auth.js'
 import { config } from './config.js'
-import { registerTools } from './tools.js'
+import { ORGANIZING_SCHEME } from './organizers.js'
+import { MEAL_GUIDANCE, registerTools } from './tools.js'
 
 const app = express()
 // StartOS terminates TLS and proxies to us; trust exactly that one hop so
@@ -36,9 +37,19 @@ const auth = requireBearerAuth({
   expectedResource: config.mcpUrl,
 })
 
+const SERVER_INSTRUCTIONS = [
+  'Mealie recipe box, meal planner, and shopping list paired with the YesChef Android app.',
+  ORGANIZING_SCHEME,
+  MEAL_GUIDANCE,
+  'After importing or creating a recipe, check unlabeledFoods and gaps: assign missing store sections with set_food_store_section, wire step summaries and 0-based ingredient indexes when helpful, and when applying cooking-note feedback pass changeSummary on update_recipe (or call log_recipe_change) so those notes are marked reviewed.',
+].join(' ')
+
 // Stateless Streamable HTTP: a fresh server and transport per request.
 app.post('/mcp', auth, express.json({ limit: '4mb' }), async (req, res) => {
-  const server = new McpServer({ name: 'mealie', version: '1.0.0' })
+  const server = new McpServer(
+    { name: 'mealie', version: '1.0.0' },
+    { instructions: SERVER_INSTRUCTIONS },
+  )
   registerTools(server)
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,

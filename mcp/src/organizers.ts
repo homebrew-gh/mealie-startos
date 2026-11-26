@@ -4,7 +4,7 @@
  */
 import { createOrReuse, mealie } from './mealie.js'
 
-export type OrganizerKind = 'categories' | 'tags'
+export type OrganizerKind = 'categories' | 'tags' | 'tools'
 export type Organizer = { id: string; name: string; slug: string }
 
 /**

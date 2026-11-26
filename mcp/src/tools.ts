@@ -82,7 +82,7 @@ async function parseAfterSave(slug: string, parse: boolean | undefined) {
  * date and meal) goes into one cook timeline, scheduled from each recipe's
  * prep and cook times.
  */
-const MEAL_GUIDANCE =
+export const MEAL_GUIDANCE =
   'Keep each dish its own recipe: save a main and its sides as separate recipes, never merged into one, and put sides in the Sides category. ' +
   'To plan a meal, add the main and each side to the meal plan on the same date with the same entryType (for example all "dinner"); the YesChef app cooks everything in one slot as a single timeline. ' +
   'Set prepTime and cookTime on every recipe, because the timeline is scheduled from them.'
@@ -244,14 +244,29 @@ function nutritionDetail(r: any) {
   return Object.keys(out).length ? out : undefined
 }
 
-/** Sets a recipe's categories and/or tags by name, creating missing ones. */
+const toolsArg = z
+  .array(z.string())
+  .optional()
+  .describe(
+    'Kitchen equipment/tool names (e.g. "Dutch oven", "Sheet pan", "Immersion blender"); replaces the recipe\'s tools. Missing ones are created.',
+  )
+
+const ratingArg = z
+  .number()
+  .min(0)
+  .max(5)
+  .optional()
+  .describe('Recipe rating from 0 to 5 (0 clears it)')
+
+/** Sets a recipe's categories, tags, and/or tools by name, creating missing ones. */
 async function setOrganizers(
   slug: string,
   categories: string[] | undefined,
   tags: string[] | undefined,
+  tools?: string[] | undefined,
 ) {
   const patch: Record<string, unknown> = {}
-  const created: { categories?: string[]; tags?: string[] } = {}
+  const created: { categories?: string[]; tags?: string[]; tools?: string[] } = {}
   if (categories) {
     const r = await resolveOrganizers('categories', categories)
     patch.recipeCategory = r.organizers
@@ -261,6 +276,11 @@ async function setOrganizers(
     const r = await resolveOrganizers('tags', tags)
     patch.tags = r.organizers
     if (r.created.length) created.tags = r.created
+  }
+  if (tools) {
+    const r = await resolveOrganizers('tools', tools)
+    patch.tools = r.organizers
+    if (r.created.length) created.tools = r.created
   }
   if (!Object.keys(patch).length) return undefined
   await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
@@ -397,7 +417,10 @@ async function recipeWithLinks(r: any) {
   }
 }
 
-function itemSummary(i: any) {
+function itemSummary(i: any, recipeNames?: Map<string, string>) {
+  const recipes = (i.recipeReferences ?? [])
+    .map((ref: any) => recipeNames?.get(ref?.recipeId) ?? ref?.recipe?.name)
+    .filter(Boolean)
   return {
     id: i.id,
     item: i.display || i.note || i.food?.name || '',
@@ -405,6 +428,7 @@ function itemSummary(i: any) {
     checked: i.checked,
     storeSection: i.label?.name ?? undefined,
     food: i.food?.name ?? undefined,
+    recipes: recipes.length ? [...new Set(recipes)] : undefined,
   }
 }
 
@@ -536,6 +560,8 @@ export function registerTools(server: McpServer) {
         totalTime: durationArg('Total time'),
         categories: categoriesArg,
         tags: tagsArg,
+        tools: toolsArg,
+        rating: ratingArg,
         nutrition: nutritionArg,
         notes: z
           .array(z.object({ title: z.string().optional(), text: z.string() }))
@@ -665,14 +691,17 @@ export function registerTools(server: McpServer) {
             text: n.text,
           }))
         }
+        if (a.rating !== undefined) {
+          extra.rating = a.rating === 0 ? null : a.rating
+        }
         if (Object.keys(extra).length) {
           await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
             body: extra,
           })
         }
       })
-      const createdOrganizers = await step('Setting categories and tags', () =>
-        setOrganizers(slug, a.categories, a.tags),
+      const createdOrganizers = await step('Setting categories, tags and tools', () =>
+        setOrganizers(slug, a.categories, a.tags, a.tools),
       )
       const { recipe, parsing } = await parseAfterSave(slug, a.parseIngredients)
       return json({
@@ -728,6 +757,8 @@ export function registerTools(server: McpServer) {
           .describe('Replaces all notes'),
         categories: categoriesArg,
         tags: tagsArg,
+        tools: toolsArg,
+        rating: ratingArg,
         nutrition: nutritionArg,
         changeSummary: z
           .string()
@@ -751,6 +782,8 @@ export function registerTools(server: McpServer) {
       notes,
       categories,
       tags,
+      tools,
+      rating,
       nutrition,
       changeSummary,
       parseIngredients,
@@ -759,6 +792,7 @@ export function registerTools(server: McpServer) {
       const warnings: string[] = []
       if (name !== undefined) patch.name = name
       if (description !== undefined) patch.description = description
+      if (rating !== undefined) patch.rating = rating === 0 ? null : rating
       if (servings !== undefined) {
         patch.recipeYield = servings
         const servingsNum = parseServingsNumber(servings)
@@ -818,7 +852,12 @@ export function registerTools(server: McpServer) {
         )
         current = r.slug
       }
-      const createdOrganizers = await setOrganizers(current, categories, tags)
+      const createdOrganizers = await setOrganizers(
+        current,
+        categories,
+        tags,
+        tools,
+      )
       let finalRecipe: any
       let parsing: unknown
       if (!ingredients) {
@@ -1187,9 +1226,9 @@ export function registerTools(server: McpServer) {
   server.registerTool(
     'list_organizers',
     {
-      title: 'List recipe categories and tags',
+      title: 'List recipe categories, tags and tools',
       description:
-        'List the recipe categories and tags that exist, with how many recipes use each. Check this before tagging so you reuse existing names. ' +
+        'List the recipe categories, tags and kitchen tools/equipment that exist, with how many recipes use each. Check this before tagging so you reuse existing names. ' +
         ORGANIZING_SCHEME,
       inputSchema: {},
       annotations: { readOnlyHint: true },
@@ -1200,13 +1239,15 @@ export function registerTools(server: McpServer) {
         slug: o.slug,
         recipes: o.recipeCount ?? undefined,
       })
-      const [categories, tags] = await Promise.all([
+      const [categories, tags, tools] = await Promise.all([
         listOrganizers('categories'),
         listOrganizers('tags'),
+        listOrganizers('tools'),
       ])
       return json({
         categories: categories.map(shape),
         tags: tags.map(shape),
+        tools: tools.map(shape),
       })
     },
   )
@@ -1216,7 +1257,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Mark recipe as cooked',
       description:
-        'Record that a recipe was made, like Mealie\'s "I made this" button: adds an entry to the recipe\'s timeline and updates its last-made date.',
+        'Record that a recipe was made, like Mealie\'s "I made this" button: adds an entry to the recipe\'s timeline, updates its last-made date, and optionally sets its rating.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id)'),
         date: date
@@ -1226,9 +1267,10 @@ export function registerTools(server: McpServer) {
           .string()
           .optional()
           .describe('Optional comment, e.g. "Doubled the garlic"'),
+        rating: ratingArg,
       },
     },
-    async ({ slug, date, note }) => {
+    async ({ slug, date, note, rating }) => {
       const recipe = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
       // Noon UTC keeps the chosen day the same in every time zone.
       const timestamp = date ? `${date}T12:00:00Z` : new Date().toISOString()
@@ -1249,11 +1291,17 @@ export function registerTools(server: McpServer) {
           { body: { timestamp } },
         )
       }
+      if (rating !== undefined) {
+        await mealie('PATCH', `/recipes/${encodeURIComponent(recipe.slug)}`, {
+          body: { rating: rating === 0 ? null : rating },
+        })
+      }
       return json({
         slug: recipe.slug,
         name: recipe.name,
         madeOn: timestamp,
         lastMade: (await lastMade(recipe.slug)) ?? timestamp,
+        rating: rating !== undefined ? (rating === 0 ? null : rating) : undefined,
       })
     },
   )
@@ -1662,7 +1710,20 @@ export function registerTools(server: McpServer) {
           title: e.title || undefined,
           text: e.text || undefined,
           recipe: e.recipe
-            ? { id: e.recipe.id, slug: e.recipe.slug, name: e.recipe.name }
+            ? {
+                id: e.recipe.id,
+                slug: e.recipe.slug,
+                name: e.recipe.name,
+                prepTime: e.recipe.prepTime || undefined,
+                cookTime: e.recipe.performTime || e.recipe.cookTime || undefined,
+                totalTime: e.recipe.totalTime || undefined,
+                hasTimes: Boolean(
+                  e.recipe.totalTime ||
+                    e.recipe.prepTime ||
+                    e.recipe.performTime ||
+                    e.recipe.cookTime,
+                ),
+              }
             : undefined,
         })),
       )
@@ -1700,6 +1761,14 @@ export function registerTools(server: McpServer) {
         date: e.date,
         entryType: e.entryType,
         recipe: e.recipe?.name,
+        recipeHasTimes: e.recipe
+          ? Boolean(
+              e.recipe.totalTime ||
+                e.recipe.prepTime ||
+                e.recipe.performTime ||
+                e.recipe.cookTime,
+            )
+          : undefined,
         title: e.title,
       })
     },
@@ -1756,16 +1825,38 @@ export function registerTools(server: McpServer) {
         'GET',
         `/households/shopping/lists/${encodeURIComponent(listId)}`,
       )
+      const recipeNames = new Map<string, string>()
+      for (const ref of l.recipeReferences ?? []) {
+        if (ref?.recipeId && ref?.recipe?.name) {
+          recipeNames.set(ref.recipeId, ref.recipe.name)
+        }
+      }
+      const sectionOrder = (l.labelSettings ?? [])
+        .slice()
+        .sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
+        .map((s: any) => s.label?.name)
+        .filter(Boolean)
+      const orderIndex = new Map<string, number>(
+        sectionOrder.map((name: string, idx: number) => [name, idx]),
+      )
       const items = (l.listItems ?? [])
         .filter((i: any) => includeChecked || !i.checked)
-        .map(itemSummary)
-        .sort(
-          (a: any, b: any) =>
-            (a.storeSection ?? '\uffff').localeCompare(
-              b.storeSection ?? '\uffff',
-            ) || a.item.localeCompare(b.item),
-        )
-      return json({ id: l.id, name: l.name, items })
+        .map((i: any) => itemSummary(i, recipeNames))
+        .sort((a: any, b: any) => {
+          const oa = a.storeSection ? (orderIndex.get(a.storeSection) ?? 9999) : 10000
+          const ob = b.storeSection ? (orderIndex.get(b.storeSection) ?? 9999) : 10000
+          if (oa !== ob) return oa - ob
+          return (
+            (a.storeSection ?? '\uffff').localeCompare(b.storeSection ?? '\uffff') ||
+            a.item.localeCompare(b.item)
+          )
+        })
+      return json({
+        id: l.id,
+        name: l.name,
+        sectionOrder: sectionOrder.length ? sectionOrder : undefined,
+        items,
+      })
     },
   )
 
