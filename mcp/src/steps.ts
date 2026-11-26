@@ -306,3 +306,96 @@ export function recipeGaps(
   }
   return gaps
 }
+
+/** Timeline subject written when recipe changes are logged after reviewing cook notes. */
+export const RECIPE_UPDATE_SUBJECT = 'Recipe updated'
+
+export function isRecipeUpdateEvent(e: {
+  subject?: string | null
+  eventType?: string | null
+}): boolean {
+  return (e.subject ?? '').trim().toLowerCase() === RECIPE_UPDATE_SUBJECT.toLowerCase()
+}
+
+export type TimelineEventWithDate = {
+  recipeId: string
+  eventType?: string | null
+  subject?: string | null
+  eventMessage?: string | null
+  at: Date
+}
+
+/**
+ * Groups cooking notes by day and recipe, marking each group `reviewed` when a
+ * newer "Recipe updated" timeline event exists for that recipe, or `pending`
+ * otherwise. Pass events scanned from newest down to `start` (including events
+ * after `end`) so a review recorded after `until` still marks earlier cooks.
+ */
+export function groupCookNotes(
+  events: TimelineEventWithDate[],
+  opts: {
+    start: Date
+    end: Date
+    onlyRecipeId?: string
+    onlyPending?: boolean
+    dayOf: (d: Date) => string
+  },
+) {
+  const latestReview = new Map<string, Date>()
+  const noteEvents: TimelineEventWithDate[] = []
+
+  for (const e of events) {
+    if (opts.onlyRecipeId && e.recipeId !== opts.onlyRecipeId) continue
+    if (isRecipeUpdateEvent(e)) {
+      const prev = latestReview.get(e.recipeId)
+      if (!prev || e.at > prev) latestReview.set(e.recipeId, e.at)
+      continue
+    }
+    if (e.at < opts.start || e.at >= opts.end) continue
+    if (e.eventType !== 'comment') continue
+    if (!String(e.eventMessage ?? '').trim()) continue
+    noteEvents.push(e)
+  }
+
+  const groups = new Map<
+    string,
+    {
+      day: string
+      recipeId: string
+      latestNoteAt: Date
+      notes: { at: string; subject?: string; text: string }[]
+    }
+  >()
+  for (const e of noteEvents) {
+    const day = opts.dayOf(e.at)
+    const key = `${day} ${e.recipeId}`
+    let g = groups.get(key)
+    if (!g) {
+      g = { day, recipeId: e.recipeId, latestNoteAt: e.at, notes: [] }
+      groups.set(key, g)
+    } else if (e.at > g.latestNoteAt) {
+      g.latestNoteAt = e.at
+    }
+    g.notes.push({
+      at: e.at.toISOString(),
+      subject: e.subject || undefined,
+      text: String(e.eventMessage).trim(),
+    })
+  }
+
+  const result = [...groups.values()].map((g) => {
+    const reviewedAt = latestReview.get(g.recipeId)
+    const reviewed = Boolean(reviewedAt && reviewedAt > g.latestNoteAt)
+    return {
+      day: g.day,
+      recipeId: g.recipeId,
+      status: reviewed ? ('reviewed' as const) : ('pending' as const),
+      reviewedAt: reviewed ? reviewedAt!.toISOString() : undefined,
+      notes: g.notes.reverse(),
+    }
+  })
+
+  return opts.onlyPending
+    ? result.filter((g) => g.status === 'pending')
+    : result
+}

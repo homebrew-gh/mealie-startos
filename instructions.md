@@ -86,7 +86,7 @@ Assistants are asked to save a main and each side as separate recipes, and to pl
 
 ### Cooking notes
 
-Assistants can read the notes you take while cooking: the cooking notes the [YesChef](https://github.com/homebrew-gh/yeschef) app saves from cook mode (spoken with its mic button, each tagged with the time and step), and comments left with Mealie's **I made this**. Ask something like "review today's cooking notes and suggest fixes for next time". The assistant points out what was hard and proposes changes to the recipe, and only saves the ones you agree to. The notes themselves stay on the recipe's timeline in Mealie.
+Assistants can read the notes you take while cooking: the cooking notes the [YesChef](https://github.com/homebrew-gh/yeschef) app saves from cook mode (spoken with its mic button, each tagged with the time and step), and comments left with Mealie's **I made this**. Ask something like "review my recent cooking notes and suggest fixes for next time". The assistant points out what was hard and proposes changes to the recipe, and only saves the ones you agree to — logging a short "Recipe updated" entry on the timeline so already-reviewed cooks aren't re-suggested next time. The notes themselves stay on the recipe's timeline in Mealie.
 
 ### Recipe photos
 

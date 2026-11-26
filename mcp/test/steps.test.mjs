@@ -1,9 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  RECIPE_UPDATE_SUBJECT,
   buildMealieInstructions,
   ensureIngredientReferenceIds,
   formatInstructions,
+  groupCookNotes,
   mergeUpdatedIngredients,
   parseServingsNumber,
   propagateSplitStepReferences,
@@ -177,4 +179,51 @@ test('unlabeledFoodsForRecipe and recipeGaps report actionable missing metadata'
     '1_unlabeled_food',
     'missing_step_ingredient_links',
   ])
+})
+
+test('groupCookNotes classifies reviewed vs pending notes and honors onlyPending', () => {
+  const dayOf = (d) => d.toISOString().slice(0, 10)
+  const events = [
+    // Review recorded AFTER `until` still marks Tuesday's Chili cook as reviewed
+    {
+      recipeId: 'r-chili',
+      eventType: 'info',
+      subject: RECIPE_UPDATE_SUBJECT,
+      eventMessage: 'Increased simmer 20 -> 30 min',
+      at: new Date('2026-11-26T15:00:00Z'),
+    },
+    // New Friday cook note with no review after it
+    {
+      recipeId: 'r-pasta',
+      eventType: 'comment',
+      subject: 'Cook notes',
+      eventMessage: '- 6:30 PM, step 2: Sauce was thin',
+      at: new Date('2026-11-25T23:30:00Z'),
+    },
+    // Tuesday Chili cook note
+    {
+      recipeId: 'r-chili',
+      eventType: 'comment',
+      subject: 'Cook notes',
+      eventMessage: '- 6:15 PM, step 4: Needed 10 more min',
+      at: new Date('2026-11-24T23:15:00Z'),
+    },
+  ]
+  const opts = {
+    start: new Date('2026-11-24T00:00:00Z'),
+    end: new Date('2026-11-26T00:00:00Z'),
+    dayOf,
+  }
+  const all = groupCookNotes(events, opts)
+  assert.equal(all.length, 2)
+  assert.equal(all[0].recipeId, 'r-pasta')
+  assert.equal(all[0].status, 'pending')
+  assert.equal(all[0].reviewedAt, undefined)
+  assert.equal(all[1].recipeId, 'r-chili')
+  assert.equal(all[1].status, 'reviewed')
+  assert.equal(all[1].reviewedAt, '2026-11-26T15:00:00.000Z')
+
+  const pendingOnly = groupCookNotes(events, { ...opts, onlyPending: true })
+  assert.equal(pendingOnly.length, 1)
+  assert.equal(pendingOnly[0].recipeId, 'r-pasta')
 })

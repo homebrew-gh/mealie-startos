@@ -12,9 +12,11 @@ import {
 } from './ingredients.js'
 import { splitLines } from './split.js'
 import {
+  RECIPE_UPDATE_SUBJECT,
   buildMealieInstructions,
   ensureIngredientReferenceIds,
   formatInstructions,
+  groupCookNotes,
   instructionEntry,
   mergeUpdatedIngredients,
   parseServingsNumber,
@@ -720,6 +722,12 @@ export function registerTools(server: McpServer) {
         categories: categoriesArg,
         tags: tagsArg,
         nutrition: nutritionArg,
+        changeSummary: z
+          .string()
+          .optional()
+          .describe(
+            'Optional concise note of what changed and why (e.g. "Increased bake time 25 -> 35 min per cook notes"). Saved to the recipe timeline as "Recipe updated", which also marks earlier cooking notes for this recipe as reviewed.',
+          ),
         parseIngredients: parseArg,
       },
     },
@@ -737,6 +745,7 @@ export function registerTools(server: McpServer) {
       categories,
       tags,
       nutrition,
+      changeSummary,
       parseIngredients,
     }) => {
       const patch: Record<string, unknown> = {}
@@ -803,23 +812,40 @@ export function registerTools(server: McpServer) {
         current = r.slug
       }
       const createdOrganizers = await setOrganizers(current, categories, tags)
+      let finalRecipe: any
+      let parsing: unknown
       if (!ingredients) {
-        const r = await mealie('GET', `/recipes/${encodeURIComponent(current)}`)
-        return json({
-          warnings: warnings.length ? warnings : undefined,
-          createdOrganizers,
-          recipe: await recipeWithLinks(r),
-        })
+        finalRecipe = await mealie('GET', `/recipes/${encodeURIComponent(current)}`)
+      } else {
+        const res = await parseAfterSave(current, parseIngredients)
+        finalRecipe = res.recipe
+        parsing = res.parsing
       }
-      const { recipe, parsing } = await parseAfterSave(
-        current,
-        parseIngredients,
-      )
+      let changeLogged: boolean | undefined
+      if (changeSummary?.trim() && finalRecipe?.id) {
+        try {
+          await mealie('POST', '/recipes/timeline/events', {
+            body: {
+              recipeId: finalRecipe.id,
+              subject: RECIPE_UPDATE_SUBJECT,
+              eventType: 'info',
+              eventMessage: changeSummary.trim(),
+              timestamp: new Date().toISOString(),
+            },
+          })
+          changeLogged = true
+        } catch (err) {
+          warnings.push(
+            `Logging change summary: ${(err as Error).message ?? err}`,
+          )
+        }
+      }
       return json({
         warnings: warnings.length ? warnings : undefined,
         createdOrganizers,
+        changeLogged,
         parsing,
-        recipe: await recipeWithLinks(recipe),
+        recipe: await recipeWithLinks(finalRecipe),
       })
     },
   )
@@ -1189,13 +1215,50 @@ export function registerTools(server: McpServer) {
   )
 
   server.registerTool(
+    'log_recipe_change',
+    {
+      title: 'Log recipe update',
+      description:
+        'Record a short "Recipe updated" entry on a recipe\'s timeline without editing the recipe (for example after reviewing cooking notes and agreeing to keep the recipe as-is, or summarizing tweaks made across calls). Earlier cooking notes for this recipe are then marked as reviewed in list_cook_notes.',
+      inputSchema: {
+        slug: z.string().describe('Recipe slug (or id)'),
+        summary: z
+          .string()
+          .min(1)
+          .describe('Short summary, e.g. "Reviewed cook notes; keeping oven temp as-is"'),
+      },
+    },
+    async ({ slug, summary }) => {
+      const recipe = await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)
+      const timestamp = new Date().toISOString()
+      await mealie('POST', '/recipes/timeline/events', {
+        body: {
+          recipeId: recipe.id,
+          subject: RECIPE_UPDATE_SUBJECT,
+          eventType: 'info',
+          eventMessage: summary.trim(),
+          timestamp,
+        },
+      })
+      return json({
+        slug: recipe.slug,
+        name: recipe.name,
+        subject: RECIPE_UPDATE_SUBJECT,
+        summary: summary.trim(),
+        at: timestamp,
+      })
+    },
+  )
+
+  server.registerTool(
     'list_cook_notes',
     {
       title: 'List cooking notes',
       description:
-        'List notes taken while cooking, newest day first, grouped by recipe: the "Cook notes" the YesChef app saves from cook mode (one line per note with the time and the step it was taken at, e.g. "- 6:42 PM, step 3 (Sear the steak): needed 2 more minutes a side"), and comments left with Mealie\'s "I made this" or mark_cooked. ' +
+        'List notes taken while cooking, newest day first, grouped by recipe: the "Cook notes" the YesChef app saves from cook mode (one line per note with the time and the step it was taken at, plus optional scale or co-cooked dish context), and comments left with Mealie\'s "I made this" or mark_cooked. ' +
+        'Each group reports status "pending" or "reviewed" depending on whether a newer "Recipe updated" timeline entry exists; pass onlyPending: true to skip cooks already reviewed. ' +
         'Use it when the user asks to review their cooking: read each recipe with get_recipe, say what went wrong or was hard and why, and suggest concrete fixes for next time (times, temperatures, amounts, step order, clearer wording). ' +
-        'Only save changes the user agrees to, with update_recipe; tips that are not a change to a step can go in the recipe notes. The cooking notes stay as a record either way.',
+        'Only save changes the user agrees to, passing changeSummary on update_recipe (or calling log_recipe_change if keeping the recipe as-is) so those notes are marked reviewed; tips that are not a change to a step can go in the recipe notes. The cooking notes stay as a record either way.',
       inputSchema: {
         since: date
           .optional()
@@ -1205,10 +1268,16 @@ export function registerTools(server: McpServer) {
           .string()
           .optional()
           .describe('Only this recipe (slug or id)'),
+        onlyPending: z
+          .boolean()
+          .optional()
+          .describe(
+            'Only return cooking notes not yet followed by a "Recipe updated" entry (default false)',
+          ),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ since, until, slug }) => {
+    async ({ since, until, slug, onlyPending }) => {
       const today = localDay(new Date())
       const first = since ?? localDay(new Date(Date.now() - 6 * 86_400_000))
       const last = until ?? today
@@ -1220,8 +1289,9 @@ export function registerTools(server: McpServer) {
         ? (await mealie('GET', `/recipes/${encodeURIComponent(slug)}`)).id
         : undefined
 
-      const found: any[] = []
-      // Newest first; stop at the first event before the range.
+      const scanned: any[] = []
+      // Newest first; stop at the first event before the range (keep newer
+      // events after `until` so "Recipe updated" reviews still mark earlier cooks).
       pages: for (let page = 1; page <= 20; page++) {
         const r = await mealie('GET', '/recipes/timeline/events', {
           query: {
@@ -1234,16 +1304,22 @@ export function registerTools(server: McpServer) {
         for (const e of r.items ?? []) {
           const at = eventTime(e.timestamp)
           if (at < start) break pages
-          if (at >= end || e.eventType !== 'comment') continue
-          if (!String(e.eventMessage ?? '').trim()) continue
           if (only && e.recipeId !== only) continue
-          found.push({ ...e, at })
+          scanned.push({ ...e, at })
         }
         if (page >= (r.totalPages ?? r.total_pages ?? 1)) break
       }
 
+      const grouped = groupCookNotes(scanned, {
+        start,
+        end,
+        onlyRecipeId: only,
+        onlyPending,
+        dayOf: localDay,
+      })
+
       const recipes = new Map<string, any>()
-      for (const id of new Set(found.map((e) => e.recipeId))) {
+      for (const id of new Set(grouped.map((g) => g.recipeId))) {
         try {
           const r = await mealie('GET', `/recipes/${encodeURIComponent(id)}`)
           recipes.set(id, { slug: r.slug, name: r.name })
@@ -1251,24 +1327,15 @@ export function registerTools(server: McpServer) {
           recipes.set(id, { id, name: '(recipe deleted)' })
         }
       }
-      const groups = new Map<string, any>()
-      for (const e of found) {
-        const day = localDay(e.at)
-        const key = `${day} ${e.recipeId}`
-        if (!groups.has(key))
-          groups.set(key, { day, recipe: recipes.get(e.recipeId), notes: [] })
-        groups.get(key).notes.push({
-          at: e.at.toISOString(),
-          subject: e.subject,
-          text: String(e.eventMessage).trim(),
-        })
-      }
       return json({
         since: first,
         until: last,
-        cooked: [...groups.values()].map((g) => ({
-          ...g,
-          notes: g.notes.reverse(),
+        cooked: grouped.map(({ recipeId, ...g }) => ({
+          day: g.day,
+          recipe: recipes.get(recipeId),
+          status: g.status,
+          reviewedAt: g.reviewedAt,
+          notes: g.notes,
         })),
       })
     },
