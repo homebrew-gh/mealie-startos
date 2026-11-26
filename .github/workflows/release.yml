@@ -8,13 +8,17 @@ name: Release
 # Runs when:
 # - a pull request that changes current.ts is merged to main and that
 #   version has no tag yet: the tag is created here, so no manual step;
-# - someone pushes a v* tag by hand: the tag must match current.ts.
+# - someone pushes a v* tag by hand: the tag must match current.ts;
+# - someone runs it from the Actions tab (Run workflow, on main): it releases
+#   main's version, tagging it if needed. If the tag exists but has no GitHub
+#   Release (an earlier release failed), it releases that tag again.
 
 on:
   push:
     branches: ['main']
     paths: ['startos/versions/current.ts']
     tags: ['v*']
+  workflow_dispatch:
 
 permissions: {}
 
@@ -42,6 +46,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           HAS_KEY: ${{ secrets.DEV_KEY != '' }}
         run: |
           if [ "$HAS_KEY" != true ]; then
@@ -53,8 +59,20 @@ jobs:
               echo "::error::Tag $REF_NAME does not match package version $VERSION. Tag the release $EXPECTED instead."
               exit 1
             fi
+          elif [ "$EVENT" = workflow_dispatch ] && [ "$REF_NAME" != main ]; then
+            echo "::error::Run this workflow on main. To release from another branch, merge it first."
+            exit 1
           else
             if git ls-remote --exit-code --tags origin "refs/tags/$EXPECTED" > /dev/null; then
+              if [ "$EVENT" = workflow_dispatch ] && ! gh release view "$EXPECTED" > /dev/null 2>&1; then
+                echo "Tag $EXPECTED exists but has no release; releasing it again."
+                echo "tag=$EXPECTED" >> "$GITHUB_OUTPUT"
+                echo "release=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              if [ "$EVENT" = workflow_dispatch ]; then
+                echo "::warning::$EXPECTED is already released. Bump the version (see UPDATING.md) to release again."
+              fi
               echo "Tag $EXPECTED already exists; nothing new to release."
               echo "release=false" >> "$GITHUB_OUTPUT"
               exit 0
