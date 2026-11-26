@@ -138,7 +138,10 @@ const SECTION_HELP =
 
 const INSTRUCTIONS_HELP =
   'One step per entry: either a plain string or {"text": "...", "title"?: "Make the sauce", "summary"?: "Sear the steak", "ingredients"?: [0, 2]}. ' +
-  'Setting summary gives YesChef clean timer and cook-note labels; setting ingredients (0-based indexes into the flattened ingredients list) wires Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact. ' +
+  'Setting summary gives YesChef clean timer and cook-note labels. ' +
+  'Setting ingredients (0-based indexes into the flattened ingredients list — do not count section headers) wires Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact: ' +
+  'include ONLY ingredients actually measured, prepped, or added in that step, and pass [] (or omit) for passive/finishing steps that introduce nothing new (preheating, simmering, flipping, baking, resting, slicing or serving already-cooked food) — do not re-list already-combined ingredients just because the step mentions the dish or sauce. ' +
+  'Once at least one step has ingredientReferences, YesChef trusts them for the whole recipe and leaves [] steps clean. ' +
   'State step durations clearly in the text (e.g. "Simmer for 20 minutes") so timers and meal timelines pick them up.'
 
 const ingredientEntry = z.union([

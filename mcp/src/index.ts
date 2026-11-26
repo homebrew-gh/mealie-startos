@@ -41,7 +41,7 @@ const SERVER_INSTRUCTIONS = [
   'Mealie recipe box, meal planner, and shopping list paired with the YesChef Android app.',
   ORGANIZING_SCHEME,
   MEAL_GUIDANCE,
-  'After importing or creating a recipe, check unlabeledFoods and gaps: assign missing store sections with set_food_store_section, wire step summaries and 0-based ingredient indexes when helpful, and when applying cooking-note feedback pass changeSummary on update_recipe (or call log_recipe_change) so those notes are marked reviewed.',
+  'After importing or creating a recipe, check unlabeledFoods and gaps: assign missing store sections with set_food_store_section, wire step summaries and 0-based ingredient indexes (ONLY ingredients actually prepped or added in each step; leave passive steps like preheat, simmer, bake, rest, and serve empty []), and when applying cooking-note feedback pass changeSummary on update_recipe (or call log_recipe_change) so those notes are marked reviewed.',
 ].join(' ')
 
 // Stateless Streamable HTTP: a fresh server and transport per request.
