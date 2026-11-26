@@ -12,6 +12,17 @@ import {
 } from './ingredients.js'
 import { splitLines } from './split.js'
 import {
+  buildMealieInstructions,
+  ensureIngredientReferenceIds,
+  formatInstructions,
+  instructionEntry,
+  mergeUpdatedIngredients,
+  parseServingsNumber,
+  pruneOrphanedStepReferences,
+  recipeGaps,
+  unlabeledFoodsForRecipe,
+} from './steps.js'
+import {
   listOrganizers,
   ORGANIZING_SCHEME,
   resolveOrganizers,
@@ -115,6 +126,11 @@ const tagsArg = z
 
 const SECTION_HELP =
   'An entry can also be a subheading with its ingredients, {"section": "Marinade", "ingredients": ["1/4 cup lime juice", ...]}, to group the lines that go into one part of the dish. Mix plain lines and sections in order; lines before the first section have no subheading.'
+
+const INSTRUCTIONS_HELP =
+  'One step per entry: either a plain string or {"text": "...", "title"?: "Make the sauce", "summary"?: "Sear the steak", "ingredients"?: [0, 2]}. ' +
+  'Setting summary gives YesChef clean timer and cook-note labels; setting ingredients (0-based indexes into the flattened ingredients list) wires Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact. ' +
+  'State step durations clearly in the text (e.g. "Simmer for 20 minutes") so timers and meal timelines pick them up.'
 
 const ingredientEntry = z.union([
   z.string(),
@@ -348,17 +364,27 @@ async function shoppingItems(): Promise<any[]> {
   return r.items ?? []
 }
 
-/** A recipe's detail with each ingredient's linked food and store section. */
+/** A recipe's detail with indexed ingredients, linked foods, store sections, structured steps, and completeness signals. */
 async function recipeWithLinks(r: any) {
   const labels = await listLabels()
+  const detail = recipeDetail(r)
+  const unlabeledFoods = unlabeledFoodsForRecipe(r, labels)
+  const gaps = recipeGaps(r, {
+    unlabeledFoodsCount: unlabeledFoods.length,
+    hasNutrition: Boolean(detail.nutrition),
+  })
   return {
-    ...recipeDetail(r),
-    ingredients: (r.recipeIngredient ?? []).map((i: any) => ({
+    ...detail,
+    ingredients: (r.recipeIngredient ?? []).map((i: any, index: number) => ({
+      index,
       section: i.title || undefined,
       text: i.display || i.originalText || i.note || '',
       food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
       storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
     })),
+    instructions: formatInstructions(r.recipeInstructions, r.recipeIngredient),
+    unlabeledFoods: unlabeledFoods.length ? unlabeledFoods : undefined,
+    gaps: gaps.length ? gaps : undefined,
   }
 }
 
@@ -435,7 +461,7 @@ export function registerTools(server: McpServer) {
     {
       title: 'Get recipe',
       description:
-        'Get one recipe with its ingredients, instructions, notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take) and when it was last made. Each ingredient comes with the food it is saved as linked to (id and name) and the store section of that food, plus the subheading (section) it starts, if any; an ingredient without a food is not linked. Fields that are not set are left out, so use this to confirm what was saved.',
+        'Get one recipe with its indexed ingredients, structured instructions (index, optional title/summary, text, and linked 0-based ingredient indexes), notes, categories, tags, prep/cook/total times (Mealie text, e.g. "1 hour 30 minutes"), nutrition per serving (the same object and units create_recipe and update_recipe take), and when it was last made. Each ingredient includes the food it is linked to (id and name), its store section, and any subheading (section) it starts; unlabeledFoods lists linked foods that still have no store section, and gaps flags missing metadata (category, times, image, nutrition, unlinked/unlabeled foods, or step-ingredient links). Fields that are not set are left out, so use this to confirm what was saved.',
       inputSchema: {
         slug: z.string().describe('Recipe slug (or id) from search_recipes'),
       },
@@ -470,7 +496,7 @@ export function registerTools(server: McpServer) {
         body: { url, includeTags: includeTags ?? false },
       })
       const { recipe, parsing } = await parseAfterSave(slug, parseIngredients)
-      return json({ slug, parsing, recipe: recipeDetail(recipe) })
+      return json({ slug, parsing, recipe: await recipeWithLinks(recipe) })
     },
   )
 
@@ -492,7 +518,9 @@ export function registerTools(server: McpServer) {
             'One ingredient per entry, e.g. "2 cups flour". Put each food on its own entry: "salt, to taste" and "pepper, to taste", not "salt and pepper" (combined lines are split automatically when possible). ' +
               SECTION_HELP,
           ),
-        instructions: z.array(z.string()).describe('One step per entry'),
+        instructions: z
+          .array(instructionEntry)
+          .describe(INSTRUCTIONS_HELP),
         servings: z.string().optional().describe('e.g. "4 servings"'),
         prepTime: durationArg('Hands-on prep time'),
         cookTime: durationArg('Cooking time'),
@@ -535,9 +563,9 @@ export function registerTools(server: McpServer) {
         name: a.name,
         description: a.description,
         recipeIngredient: lines,
-        recipeInstructions: a.instructions.map((text) => ({
+        recipeInstructions: a.instructions.map((step) => ({
           '@type': 'HowToStep',
-          text,
+          text: typeof step === 'string' ? step : step.text,
         })),
         recipeYield: a.servings,
         prepTime: a.prepTime,
@@ -566,32 +594,61 @@ export function registerTools(server: McpServer) {
           return undefined
         }
       }
-      // Mealie's JSON import doesn't keep the times, so set them directly.
-      await step('Saving times, nutrition, notes and ingredient subheadings', async () => {
+      // Mealie's JSON import doesn't keep the times, subheadings, or structured step fields, so set them directly.
+      await step('Saving times, nutrition, notes, subheadings and structured steps', async () => {
         const extra: Record<string, unknown> = timePatch(a)
-        if (a.nutrition) {
-          const current = await mealie<any>(
-            'GET',
-            `/recipes/${encodeURIComponent(slug)}`,
-          )
+        const hasStructuredSteps = a.instructions.some((s) => typeof s !== 'string')
+        const hasTitles = titles.some(Boolean)
+        const servingsNum = parseServingsNumber(a.servings)
+        const needsCurrent = Boolean(
+          a.nutrition || hasTitles || hasStructuredSteps || servingsNum !== undefined,
+        )
+        const current = needsCurrent
+          ? await mealie<any>('GET', `/recipes/${encodeURIComponent(slug)}`)
+          : undefined
+        if (a.nutrition && current) {
           Object.assign(extra, nutritionPatch(current, a.nutrition))
         }
-        if (titles.some(Boolean)) {
+        if (servingsNum !== undefined && current && !current.recipeServings) {
+          extra.recipeServings = servingsNum
+        }
+        let savedIngredients: any[] = current?.recipeIngredient ?? []
+        let ingredientsChanged = false
+        if (hasTitles || hasStructuredSteps) {
+          const withIds = ensureIngredientReferenceIds(savedIngredients)
+          if (withIds.some((ing, i) => ing !== savedIngredients[i])) {
+            ingredientsChanged = true
+          }
+          savedIngredients = withIds
+        }
+        if (hasTitles) {
           // The JSON import has no subheadings; put them on the saved lines.
-          const current = await mealie<any>(
-            'GET',
-            `/recipes/${encodeURIComponent(slug)}`,
-          )
-          const saved: any[] = current.recipeIngredient ?? []
-          if (saved.length !== lines.length) {
+          if (savedIngredients.length !== lines.length) {
             throw new Error(
-              `Mealie saved ${saved.length} ingredients for ${lines.length} lines, so the subheadings were not set; set them with update_recipe`,
+              `Mealie saved ${savedIngredients.length} ingredients for ${lines.length} lines, so the subheadings were not set; set them with update_recipe`,
             )
           }
-          extra.recipeIngredient = saved.map((ing, i) => ({
+          savedIngredients = savedIngredients.map((ing, i) => ({
             ...ing,
             title: titles[i] ?? '',
           }))
+          ingredientsChanged = true
+        }
+        if (ingredientsChanged) {
+          extra.recipeIngredient = savedIngredients
+        }
+        if (hasStructuredSteps) {
+          const built = buildMealieInstructions(
+            a.instructions,
+            savedIngredients,
+            current?.recipeInstructions ?? [],
+          )
+          extra.recipeInstructions = built.instructions
+          if (built.invalidIndexes.length) {
+            warnings.push(
+              `Ignored out-of-range step ingredient indexes: ${[...new Set(built.invalidIndexes)].join(', ')} (recipe has ${savedIngredients.length} ingredients)`,
+            )
+          }
         }
         if (a.notes?.length) {
           extra.notes = a.notes.map((n) => ({
@@ -653,9 +710,9 @@ export function registerTools(server: McpServer) {
               ' To add subheadings to a recipe, pass all its ingredients again grouped into sections.',
           ),
         instructions: z
-          .array(z.string())
+          .array(instructionEntry)
           .optional()
-          .describe('Replaces all steps; one per entry'),
+          .describe('Replaces all steps. ' + INSTRUCTIONS_HELP),
         notes: z
           .array(z.object({ title: z.string().optional(), text: z.string() }))
           .optional()
@@ -683,28 +740,57 @@ export function registerTools(server: McpServer) {
       parseIngredients,
     }) => {
       const patch: Record<string, unknown> = {}
+      const warnings: string[] = []
       if (name !== undefined) patch.name = name
       if (description !== undefined) patch.description = description
-      if (servings !== undefined) patch.recipeYield = servings
-      Object.assign(patch, timePatch({ prepTime, cookTime, totalTime }))
-      if (nutrition) {
-        const current = await mealie<any>(
-          'GET',
-          `/recipes/${encodeURIComponent(slug)}`,
-        )
-        Object.assign(patch, nutritionPatch(current, nutrition))
+      if (servings !== undefined) {
+        patch.recipeYield = servings
+        const servingsNum = parseServingsNumber(servings)
+        if (servingsNum !== undefined) patch.recipeServings = servingsNum
       }
+      Object.assign(patch, timePatch({ prepTime, cookTime, totalTime }))
+      const existing =
+        nutrition || ingredients || instructions
+          ? await mealie<any>('GET', `/recipes/${encodeURIComponent(slug)}`)
+          : undefined
+      if (nutrition && existing) {
+        Object.assign(patch, nutritionPatch(existing, nutrition))
+      }
+      let nextIngredients: any[] | undefined
       if (ingredients) {
         const { lines, titles } = flattenIngredients(ingredients)
-        patch.recipeIngredient = lines.map((note, i) => ({
-          note,
-          originalText: note,
-          display: note,
-          title: titles[i] ?? '',
-        }))
+        nextIngredients = mergeUpdatedIngredients(
+          existing?.recipeIngredient ?? [],
+          lines,
+          titles,
+        )
+        patch.recipeIngredient = nextIngredients
       }
-      if (instructions)
-        patch.recipeInstructions = instructions.map((text) => ({ text }))
+      if (instructions) {
+        let targetIngredients = nextIngredients ?? (existing?.recipeIngredient ?? [])
+        const withIds = ensureIngredientReferenceIds(targetIngredients)
+        if (!nextIngredients && withIds.some((ing, i) => ing !== targetIngredients[i])) {
+          patch.recipeIngredient = withIds
+        }
+        targetIngredients = withIds
+        const built = buildMealieInstructions(
+          instructions,
+          targetIngredients,
+          existing?.recipeInstructions ?? [],
+        )
+        patch.recipeInstructions = built.instructions
+        if (built.invalidIndexes.length) {
+          warnings.push(
+            `Ignored out-of-range step ingredient indexes: ${[...new Set(built.invalidIndexes)].join(', ')} (recipe has ${targetIngredients.length} ingredients)`,
+          )
+        }
+      } else if (nextIngredients) {
+        const pruned = pruneOrphanedStepReferences(
+          existing?.recipeInstructions ?? [],
+          nextIngredients,
+        )
+        if (pruned) patch.recipeInstructions = pruned
+      }
       if (notes)
         patch.notes = notes.map((n) => ({ title: n.title ?? '', text: n.text }))
       let current = slug
@@ -719,13 +805,18 @@ export function registerTools(server: McpServer) {
       const createdOrganizers = await setOrganizers(current, categories, tags)
       if (!ingredients) {
         const r = await mealie('GET', `/recipes/${encodeURIComponent(current)}`)
-        return json({ createdOrganizers, recipe: await recipeWithLinks(r) })
+        return json({
+          warnings: warnings.length ? warnings : undefined,
+          createdOrganizers,
+          recipe: await recipeWithLinks(r),
+        })
       }
       const { recipe, parsing } = await parseAfterSave(
         current,
         parseIngredients,
       )
       return json({
+        warnings: warnings.length ? warnings : undefined,
         createdOrganizers,
         parsing,
         recipe: await recipeWithLinks(recipe),
@@ -955,20 +1046,27 @@ export function registerTools(server: McpServer) {
       },
     },
     async ({ slug, parser, reparseAll }) => {
-      const r = await parseRecipe(slug, { parser, onlyUnlinked: !reparseAll })
+      const [r, labels] = await Promise.all([
+        parseRecipe(slug, { parser, onlyUnlinked: !reparseAll }),
+        listLabels(),
+      ])
+      const unlabeledFoods = unlabeledFoodsForRecipe(r.recipe, labels)
       return json({
         parser: r.parser,
         parsed: r.parsed,
         splitLines: r.splitLines,
         createdFoods: r.createdFoods,
         createdUnits: r.createdUnits,
+        rematchedFoods: r.rematchedFoods,
         lowConfidence: r.lowConfidence,
-        ingredients: (r.recipe.recipeIngredient ?? []).map((i: any) => ({
+        unlabeledFoods: unlabeledFoods.length ? unlabeledFoods : undefined,
+        ingredients: (r.recipe.recipeIngredient ?? []).map((i: any, index: number) => ({
+          index,
           text: i.display || i.originalText || i.note,
           quantity: i.quantity,
           unit: i.unit?.name,
-          food: i.food?.name,
-          storeSection: i.food?.label?.name,
+          food: i.food?.id ? { id: i.food.id, name: i.food.name } : undefined,
+          storeSection: i.food?.id ? sectionName(i.food, labels) : undefined,
           note: i.note || undefined,
         })),
       })

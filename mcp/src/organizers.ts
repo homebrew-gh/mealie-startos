@@ -13,7 +13,7 @@ export type Organizer = { id: string; name: string; slug: string }
  */
 export const ORGANIZING_SCHEME =
   'Use one category per recipe as its cookbook chapter: Mains, Sides, Soups & Salads, Breakfast, Desserts, Baking, Starters & Snacks, Drinks, Sauces & Basics. ' +
-  'Use tags for protein (Chicken, Beef, Pork, Lamb, Seafood, Vegetarian, Vegan) and cooking style (Quick, Slow cooker, Grill, One pot, Make ahead). ' +
+  'Use tags for protein (Chicken, Beef, Pork, Lamb, Turkey, Seafood, Vegetarian, Vegan) and cooking style (Quick, Slow cooker, Grill, One pot, Make ahead, Weeknight, Freezer friendly). ' +
   'Reuse these exact names, and check list_organizers before inventing new ones.'
 
 const norm = (s: string) => s.trim().toLowerCase()

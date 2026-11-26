@@ -7,8 +7,10 @@
  * they have been run through the ingredient parser. Recipes created through
  * the API skip that step, so the connector runs it itself.
  */
+import { randomUUID } from 'node:crypto'
 import { createOrReuse, mealie } from './mealie.js'
 import { splitLines } from './split.js'
+import { propagateSplitStepReferences } from './steps.js'
 
 export type Parser = 'openai' | 'nlp' | 'brute'
 
@@ -229,15 +231,25 @@ export async function parseRecipe(
   )
   const linked = await toRecipeIngredients(lines)
   const replacements = new Map<number, any[]>()
+  const extraRefsByOriginal = new Map<string, string[]>()
   pieces.forEach((p, k) => {
     const n = linked.ingredients[k]
     const t = todo[p.from]
     const list = replacements.get(t.index) ?? []
     // The first piece keeps the original ingredient's other fields (such as
-    // its referenceId); extra pieces are new ingredients.
-    const base = list.length ? {} : t.ing
+    // its referenceId); extra pieces get new referenceIds and propagate to any
+    // step that referenced the original line.
+    const isExtra = list.length > 0
+    const base = isExtra ? {} : t.ing
+    const extraRefId = isExtra ? randomUUID() : undefined
+    if (extraRefId && t.ing.referenceId) {
+      const extras = extraRefsByOriginal.get(t.ing.referenceId) ?? []
+      extras.push(extraRefId)
+      extraRefsByOriginal.set(t.ing.referenceId, extras)
+    }
     list.push({
       ...base,
+      ...(extraRefId ? { referenceId: extraRefId } : {}),
       quantity: n.quantity,
       unit: n.unit,
       food: n.food,
@@ -248,8 +260,15 @@ export async function parseRecipe(
     replacements.set(t.index, list)
   })
   const next = current.flatMap((ing, index) => replacements.get(index) ?? [ing])
+  const updatedInstructions = propagateSplitStepReferences(
+    recipe.recipeInstructions ?? [],
+    extraRefsByOriginal,
+  )
   const saved = await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
-    body: { recipeIngredient: next },
+    body: {
+      recipeIngredient: next,
+      ...(updatedInstructions ? { recipeInstructions: updatedInstructions } : {}),
+    },
   })
   return {
     slug,
