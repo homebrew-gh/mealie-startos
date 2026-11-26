@@ -141,7 +141,8 @@ const INSTRUCTIONS_HELP =
   'Include summary (short label for YesChef timers and cook notes) and ingredients (0-based indexes into the flattened ingredients list — do not count section headers) to wire Mealie ingredientReferences so cook mode\'s "You\'ll need" box is exact: ' +
   'include ONLY ingredients actually measured, prepped, or added in that step, and pass [] (or omit) for passive/finishing steps that introduce nothing new (preheating, simmering, flipping, baking, resting, slicing or serving already-cooked food) — do not re-list already-combined ingredients just because the step mentions the dish or sauce. ' +
   'Once at least one step has ingredientReferences, YesChef trusts them for the whole recipe and leaves [] steps clean. ' +
-  'State step durations clearly in the text (e.g. "Simmer for 20 minutes") so timers and meal timelines pick them up.'
+  'State step durations clearly in the text (e.g. "Simmer for 20 minutes") so timers and meal timelines pick them up. ' +
+  'Split phased or nested timings into separate sequential steps whenever an action changes mid-cook (foil on/off, flipping, changing oven temp, adding toppings partway): e.g. instead of "Bake 40-48 min, covering with foil for at least 15 min", write Step 1 "Bake uncovered for 25-30 minutes until lightly golden" and Step 2 "Loosely tent with foil and continue baking for 15-18 minutes until set". One clear timing phase per step prevents confusing overlapping timers and keeps meal timelines accurate.'
 
 const ingredientEntry = z.union([
   z.string(),
