@@ -7,8 +7,16 @@
  * they have been run through the ingredient parser. Recipes created through
  * the API skip that step, so the connector runs it itself.
  */
+import { randomUUID } from 'node:crypto'
 import { createOrReuse, mealie } from './mealie.js'
 import { splitLines } from './split.js'
+import { propagateSplitStepReferences } from './steps.js'
+import {
+  type FoodLike,
+  findFoodInList,
+  normalizeFoodKey,
+  ownFoodTextForLine,
+} from './foodMatch.js'
 
 export type Parser = 'openai' | 'nlp' | 'brute'
 
@@ -61,41 +69,59 @@ export async function parseLines(
   }
 }
 
-/** Finds a food or unit by exact name (case-insensitive), or creates it. */
+/**
+ * Finds a food or unit by normalized name, plural, abbreviation, or alias
+ * (loading Mealie's catalog once per resolver), or creates it.
+ */
 class Resolver {
+  private catalog?: Named[]
   private cache = new Map<string, Named>()
   created: string[] = []
   constructor(private kind: 'foods' | 'units') {}
 
-  /** An existing food or unit with exactly this name, plural or abbreviation. */
-  async findExact(name: string): Promise<Named | undefined> {
-    const key = norm(name)
-    const found = await mealie('GET', `/${this.kind}`, {
-      query: { search: name, perPage: 50 },
-    })
-    return (found.items ?? []).find(
-      (x: any) =>
-        norm(x.name) === key ||
-        (x.pluralName && norm(x.pluralName) === key) ||
-        (x.abbreviation && norm(x.abbreviation) === key),
-    )
+  private async loadCatalog(force = false): Promise<Named[]> {
+    if (!this.catalog || force) {
+      const r = await mealie('GET', `/${this.kind}`, {
+        query: { perPage: -1 },
+      })
+      this.catalog = (r.items ?? []) as Named[]
+    }
+    return this.catalog!
   }
 
-  async resolve(item: Named | null | undefined): Promise<Named | null> {
-    if (!item?.name?.trim()) return null
-    if (item.id) return item
-    const key = norm(item.name)
+  /** An existing food or unit matching by name, plural, abbreviation, or alias. */
+  async findExact(name: string, forceReload = false): Promise<Named | undefined> {
+    const all = await this.loadCatalog(forceReload)
+    return findFoodInList(name, all as (Named & FoodLike)[])
+  }
+
+  /** Resolves an item by id (refreshing from catalog when present) or by name/alias, creating if missing. */
+  async resolve(
+    item: Named | null | undefined,
+    opts: { createIfMissing?: boolean } = {},
+  ): Promise<Named | null> {
+    if (!item?.name?.trim() && !item?.id) return null
+    const createIfMissing = opts.createIfMissing ?? true
+    if (item.id) {
+      const all = await this.loadCatalog()
+      return all.find((x) => x.id === item.id) ?? item
+    }
+    const key = normalizeFoodKey(item.name) || norm(item.name)
     const hit = this.cache.get(key)
     if (hit) return hit
     let match = await this.findExact(item.name)
     if (!match) {
+      if (!createIfMissing) return null
       const r = await createOrReuse<Named>(
         () =>
           mealie('POST', `/${this.kind}`, { body: { name: item.name.trim() } }),
-        () => this.findExact(item.name),
+        () => this.findExact(item.name, true),
       )
       match = r.value
-      if (r.created) this.created.push(item.name.trim())
+      if (r.created) {
+        this.created.push(item.name.trim())
+        this.catalog?.push(match!)
+      }
     }
     this.cache.set(key, match!)
     return match!
@@ -115,8 +141,9 @@ export async function toRecipeIngredients(parsed: ParsedLine[]) {
   for (const p of parsed) {
     let food = await foods.resolve(p.food)
     // The parser fuzzy-matches to existing foods, so "simple syrup" can come
-    // back as "maple syrup". If the matched food's name isn't in the line,
-    // use the line's own food words, matched exactly or created.
+    // back as "maple syrup" or "peanut butter" as "butter". Validate against
+    // the food's name/plural/aliases and head noun; if it fails, resolve or
+    // create the line's own cleaned food phrase instead.
     const own = food?.id ? ownFoodText(p, food) : undefined
     if (own) {
       const exact = await foods.resolve({ name: own })
@@ -143,56 +170,14 @@ export async function toRecipeIngredients(parsed: ParsedLine[]) {
   }
 }
 
-/** Units to strip from a line even when the parser read the unit differently. */
-const COMMON_UNITS = [
-  'teaspoon', 'tablespoon', 'tsp', 'tbsp', 'tbs', 'cup', 'ounce', 'oz',
-  'fluid ounce', 'fl oz', 'pound', 'lb', 'gram', 'g', 'kilogram', 'kg',
-  'milliliter', 'millilitre', 'ml', 'liter', 'litre', 'l', 'pinch', 'dash',
-  'splash', 'clove', 'can', 'jar', 'bottle', 'package', 'pkg', 'slice',
-  'piece', 'bunch', 'sprig', 'stick', 'handful', 'part', 'shot', 'jigger',
-  'drop', 'quart', 'qt', 'pint', 'pt', 'gallon',
-]
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
 /**
  * The food words of an ingredient line, when the parser linked it to a food
- * whose name isn't in the line at all (a fuzzy match). Undefined when the
- * match is fine or the words can't be picked out cleanly.
+ * that does not genuinely match the line (fuzzy mismatch). Undefined when the
+ * match is valid (including aliases, plurals, and safe qualifiers) or the words
+ * cannot be picked out cleanly.
  */
 export function ownFoodText(p: ParsedLine, food: Named): string | undefined {
-  const line = norm(p.input)
-  const names = [food.name, food.pluralName as string | undefined]
-    .filter((n): n is string => Boolean(n && n.trim()))
-    .map(norm)
-  if (names.some((n) => line.includes(n))) return undefined
-  let t = line.replace(/\([^)]*\)/g, ' ')
-  const note = p.note ? norm(p.note) : ''
-  if (note && t.includes(note)) t = t.replace(note, ' ')
-  t = t.split(',')[0]
-  t = t.replace(/^[\s\d./\-–¼½¾⅓⅔⅛⅜⅝⅞]+/, ' ').trim()
-  t = t.replace(/^(a|an)\s+/, '')
-  const unitNames = [
-    p.unit?.name,
-    p.unit?.pluralName,
-    p.unit?.abbreviation,
-    ...COMMON_UNITS,
-  ]
-    .filter((n): n is string => typeof n === 'string' && Boolean(n.trim()))
-    .map(norm)
-    .sort((a, b) => b.length - a.length)
-  for (const u of unitNames) {
-    const m = t.match(new RegExp(`^${escapeRe(u)}(s|es)?\\.?(\\s+|$)`))
-    if (m) {
-      t = t.slice(m[0].length)
-      break
-    }
-  }
-  t = t.replace(/^of\s+/, '').replace(/\s+/g, ' ').trim()
-  if (!t || t.split(' ').length > 5 || !/^[a-z][a-z' -]*$/.test(t)) {
-    return undefined
-  }
-  return t
+  return ownFoodTextForLine(p.input, food as FoodLike, p.note, p.unit)
 }
 
 /** The text to re-parse for an ingredient already stored on a recipe. */
@@ -229,15 +214,25 @@ export async function parseRecipe(
   )
   const linked = await toRecipeIngredients(lines)
   const replacements = new Map<number, any[]>()
+  const extraRefsByOriginal = new Map<string, string[]>()
   pieces.forEach((p, k) => {
     const n = linked.ingredients[k]
     const t = todo[p.from]
     const list = replacements.get(t.index) ?? []
     // The first piece keeps the original ingredient's other fields (such as
-    // its referenceId); extra pieces are new ingredients.
-    const base = list.length ? {} : t.ing
+    // its referenceId); extra pieces get new referenceIds and propagate to any
+    // step that referenced the original line.
+    const isExtra = list.length > 0
+    const base = isExtra ? {} : t.ing
+    const extraRefId = isExtra ? randomUUID() : undefined
+    if (extraRefId && t.ing.referenceId) {
+      const extras = extraRefsByOriginal.get(t.ing.referenceId) ?? []
+      extras.push(extraRefId)
+      extraRefsByOriginal.set(t.ing.referenceId, extras)
+    }
     list.push({
       ...base,
+      ...(extraRefId ? { referenceId: extraRefId } : {}),
       quantity: n.quantity,
       unit: n.unit,
       food: n.food,
@@ -248,8 +243,15 @@ export async function parseRecipe(
     replacements.set(t.index, list)
   })
   const next = current.flatMap((ing, index) => replacements.get(index) ?? [ing])
+  const updatedInstructions = propagateSplitStepReferences(
+    recipe.recipeInstructions ?? [],
+    extraRefsByOriginal,
+  )
   const saved = await mealie('PATCH', `/recipes/${encodeURIComponent(slug)}`, {
-    body: { recipeIngredient: next },
+    body: {
+      recipeIngredient: next,
+      ...(updatedInstructions ? { recipeInstructions: updatedInstructions } : {}),
+    },
   })
   return {
     slug,
