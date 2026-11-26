@@ -141,6 +141,8 @@ CI: `.github/workflows/build.yml` builds both architectures on every pull reques
 
 It runs when a change to `current.ts` lands on `main` and that version has no tag yet (it creates the tag itself), or when someone pushes a `v*` tag by hand (the tag must match `current.ts`).
 
+It can also be run by hand: Actions → Release → Run workflow, on `main`. That releases `main`'s version, creating the tag if it doesn't exist. If the tag exists but has no GitHub Release (an earlier release failed partway), it releases that tag again. If the version is already released it does nothing, so bump the version first to publish a new release.
+
 One-time setup: create a developer signing key and save it as the repository secret `DEV_KEY` (Settings → Secrets and variables → Actions). `start-cli init-key` makes one at `~/.startos/developer.key.pem`. Paste the whole file, including the `BEGIN` and `END` lines. Keep a copy offline: every release should be signed with the same key, because users trust it by its public key (`start-cli pubkey` prints it; it is published in `signing-key.pub.pem` and under Installing). If the key ever changes, update both.
 
 To release: bump the version as in `UPDATING.md` in a pull request and merge it. Nothing else is needed.
