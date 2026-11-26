@@ -29,12 +29,13 @@ Current Mealie versions set this up inside Mealie, not with the old `OPENAI_*` e
 
 Some providers that work:
 
-| Provider           | Base URL                            | Model                    |
-| ------------------ | ----------------------------------- | ------------------------ |
-| OpenAI             | `https://api.openai.com/v1/`        | any chat model it offers |
-| Claude (Anthropic) | `https://api.anthropic.com/v1/`     | `claude-sonnet-5-5`      |
-| OpenRouter         | `https://openrouter.ai/api/v1/`     | any model it lists       |
-| Ollama on your LAN | `http://<ollama address>:11434/v1/` | a model you pulled       |
+| Provider           | Base URL                            | Model                     |
+| ------------------ | ----------------------------------- | ------------------------- |
+| OpenAI             | `https://api.openai.com/v1/`        | any chat model it offers  |
+| Claude (Anthropic) | `https://api.anthropic.com/v1/`     | any Claude model it offers |
+| xAI (Grok)         | `https://api.x.ai/v1/`              | any Grok model it offers  |
+| OpenRouter         | `https://openrouter.ai/api/v1/`     | any model it lists        |
+| Ollama on your LAN | `http://<ollama address>:11434/v1/` | a model you pulled        |
 
 Every request from a provider goes to the model you set on it. Anthropic's endpoint is its OpenAI-compatible layer and uses Claude Console API credits, not a Claude.ai subscription. It has no speech-to-text, so importing from video needs a separate audio provider, such as OpenAI.
 
@@ -45,9 +46,9 @@ Every request from a provider goes to the model you set on it. Anthropic's endpo
 
 Any address StartOS lists for the interface works, including your box's LAN address when you are connected over the StartOS WireGuard VPN. HTTPS addresses use your server's own certificate authority, so a device or program that talks to Mealie over HTTPS must trust your **Root CA**: download it from StartOS and install it on the device, as described in the StartOS guide to trusting your Root CA (on Android it goes in **Settings → Security → Encryption & credentials → Install a certificate → CA certificate**). Plain-HTTP LAN addresses don't need it, but send your token unencrypted.
 
-For an Android phone or tablet, [YesChef](https://github.com/homebrew-gh/yeschef) is a companion app for Mealie with offline shopping lists sorted by aisle, cook mode with timers, and a cookbook view. Set it up with the address and token from the steps above.
+For an Android phone or tablet, [YesChef](https://github.com/homebrew-gh/yeschef) is a companion app for Mealie with offline shopping lists sorted by aisle, a cookbook view, whole-meal cooking timelines, range and mid-timer checkpoint buzzers, and spoken cook notes. Set it up with the address and token from the steps above.
 
-## AI connector (Claude and other cloud assistants)
+## AI connector (Claude, Grok, and other cloud assistants)
 
 The package includes an optional MCP server that lets AI assistants search and read your recipes, add new ones, and manage meal plans and shopping lists. It has its own **AI Connector (MCP)** interface, so you can put just the connector on the internet and keep Mealie itself private on your LAN and VPN.
 
