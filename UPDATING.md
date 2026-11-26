@@ -14,6 +14,8 @@ gh release view -R mealie-recipes/mealie --json tagName -q .tagName
 
 `node .github/scripts/bump-mealie.mjs vX.Y.Z` does both steps below.
 
+(`node .github/scripts/bump-mealie.mjs --revision "notes"` does only step 2, keeping the image and raising the revision, e.g. `3.31.0:15` to `3.31.0:16`. A manual run of the Release workflow uses it; see "Releasing" in `README.md`.)
+
 1. Set `images.mealie.source.dockerTag` in `startos/manifest/index.ts` to the new tag.
 2. In `startos/versions/`, move `current.ts` into a file named for the old version, add it to `other` in `versions/index.ts`, and write a new `current.ts` with version `<new>:0` and release notes.
 

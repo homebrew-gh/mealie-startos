@@ -11,7 +11,10 @@ name: Release
 # - someone pushes a v* tag by hand: the tag must match current.ts;
 # - someone runs it from the Actions tab (Run workflow, on main): it releases
 #   main's version, tagging it if needed. If the tag exists but has no GitHub
-#   Release (an earlier release failed), it releases that tag again.
+#   Release (an earlier release failed), it releases that tag again. If that
+#   version is already released, it raises the package revision
+#   (3.31.0:15 -> 3.31.0:16, via .github/scripts/bump-mealie.mjs --revision),
+#   commits that to main and releases it.
 
 on:
   push:
@@ -19,6 +22,11 @@ on:
     paths: ['startos/versions/current.ts']
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      notes:
+        description: 'Release notes (only used when a new revision is needed because this version is already released)'
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -32,8 +40,8 @@ jobs:
     permissions:
       contents: write
     outputs:
-      tag: ${{ steps.decide.outputs.tag }}
-      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag || steps.bump.outputs.tag }}
+      release: ${{ steps.decide.outputs.release || (steps.bump.outputs.tag && 'true') }}
     steps:
       - uses: actions/checkout@v6
       - name: Read the package version
@@ -71,7 +79,9 @@ jobs:
                 exit 0
               fi
               if [ "$EVENT" = workflow_dispatch ]; then
-                echo "::warning::$EXPECTED is already released. Bump the version (see UPDATING.md) to release again."
+                echo "$EXPECTED is already released; bumping the package revision."
+                echo "bump=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               echo "Tag $EXPECTED already exists; nothing new to release."
               echo "release=false" >> "$GITHUB_OUTPUT"
@@ -84,6 +94,37 @@ jobs:
           fi
           echo "tag=$EXPECTED" >> "$GITHUB_OUTPUT"
           echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.decide.outputs.bump == 'true'
+        with:
+          node-version: 22
+
+      - name: Bump the package revision, commit to main and tag it
+        id: bump
+        if: steps.decide.outputs.bump == 'true'
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          if [ -z "$NOTES" ]; then
+            MEALIE=$(grep -oP "ghcr\.io/mealie-recipes/mealie:\Kv[^'\"]+" startos/manifest/index.ts)
+            NOTES="Rebuild of the package for Mealie $MEALIE, with the latest packaging changes."
+          fi
+          npm ci
+          node .github/scripts/bump-mealie.mjs --revision "$NOTES"
+          npx tsc --noEmit
+          VERSION=$(grep -oP "version:\s*'\K[^']+" startos/versions/current.ts)
+          TAG="v${VERSION//:/_}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898333+github-actions[bot]@users.noreply.github.com'
+          git add -A startos
+          git commit -m "Release $VERSION"
+          git tag "$TAG"
+          # Pushes made with the workflow token don't start other workflows,
+          # so this run's release job is the only release. --atomic: if main
+          # moved since this run started, neither main nor the tag changes.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
   release:
     needs: prepare
