@@ -7,7 +7,11 @@ import { randomUUID } from 'node:crypto'
 import * as z from 'zod/v4'
 
 export const instructionEntry = z.object({
-  text: z.string().describe('Full instruction text for this step'),
+  text: z
+    .string()
+    .describe(
+      'Full instruction text for this step. Keep one clear timing phase per step — split mid-cook changes (covering/uncovering with foil, flipping, changing oven temp, adding ingredients partway) into separate sequential steps instead of nesting times.',
+    ),
   title: z
     .string()
     .optional()
