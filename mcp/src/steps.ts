@@ -6,28 +6,25 @@
 import { randomUUID } from 'node:crypto'
 import * as z from 'zod/v4'
 
-export const instructionEntry = z.union([
-  z.string(),
-  z.object({
-    text: z.string().describe('Instruction text for this step'),
-    title: z
-      .string()
-      .optional()
-      .describe('Optional section heading above this step, e.g. "Make the sauce"'),
-    summary: z
-      .string()
-      .optional()
-      .describe(
-        'Short label for this step (used on timers and cook notes), e.g. "Sear the steak"',
-      ),
-    ingredients: z
-      .array(z.number().int().min(0))
-      .optional()
-      .describe(
-        "0-based indexes into the flattened ingredients list for ONLY the ingredients actually measured, prepped, or added in this step (do not count section headers). Sets Mealie's ingredientReferences so YesChef's \"You'll need\" box is exact. Omit or pass [] for steps that don't introduce or prep anything new (preheating, simmering, flipping, baking, resting, slicing/serving already-cooked food).",
-      ),
-  }),
-])
+export const instructionEntry = z.object({
+  text: z.string().describe('Full instruction text for this step'),
+  title: z
+    .string()
+    .optional()
+    .describe('Optional section heading above this step, e.g. "Make the sauce"'),
+  summary: z
+    .string()
+    .optional()
+    .describe(
+      'Short label for this step (used on YesChef timers and cook notes), e.g. "Sear the steak"',
+    ),
+  ingredients: z
+    .array(z.number().int().min(0))
+    .optional()
+    .describe(
+      "0-based indexes into the flattened ingredients list for ONLY the ingredients actually measured, prepped, or added in this step (do not count section headers). Sets Mealie's ingredientReferences so YesChef's \"You'll need\" box is exact. Omit or pass [] for steps that don't introduce or prep anything new (preheating, simmering, flipping, baking, resting, slicing/serving already-cooked food).",
+    ),
+})
 
 export type InstructionEntry = z.infer<typeof instructionEntry>
 
@@ -101,7 +98,7 @@ export function mergeUpdatedIngredients(
  * `recipeIngredients`'s `referenceId`s.
  */
 export function buildMealieInstructions(
-  entries: InstructionEntry[],
+  entries: Array<InstructionEntry | string>,
   recipeIngredients: any[],
   existingSteps: any[] = [],
   makeId: () => string = randomUUID,

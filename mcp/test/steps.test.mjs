@@ -1,11 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import * as z from 'zod/v4'
 import {
   RECIPE_UPDATE_SUBJECT,
   buildMealieInstructions,
   ensureIngredientReferenceIds,
   formatInstructions,
   groupCookNotes,
+  instructionEntry,
   mergeUpdatedIngredients,
   parseServingsNumber,
   propagateSplitStepReferences,
@@ -13,6 +15,20 @@ import {
   recipeGaps,
   unlabeledFoodsForRecipe,
 } from '../dist/steps.js'
+
+test('instructionEntry emits a direct object JSON schema without anyOf flattening', () => {
+  const schema = z.toJSONSchema(z.array(instructionEntry))
+  assert.equal(schema.type, 'array')
+  assert.equal(schema.items.type, 'object')
+  assert.equal(schema.items.anyOf, undefined)
+  assert.deepEqual(Object.keys(schema.items.properties).sort(), [
+    'ingredients',
+    'summary',
+    'text',
+    'title',
+  ])
+  assert.deepEqual(schema.items.required, ['text'])
+})
 
 test('mergeUpdatedIngredients preserves referenceId and parsed fields for unchanged lines', () => {
   const existing = [
